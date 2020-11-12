@@ -1,0 +1,14 @@
+name: hma-cluster
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - xarray
+  - pandas
+  - numpy
+  - geopandas
+  - notebook
+  - scikit-learn
+  - seaborn
+prefix: /home/durbank/miniconda3/envs/hma-cluster

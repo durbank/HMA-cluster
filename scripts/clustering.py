@@ -95,9 +95,16 @@ for i, season in enumerate(seasons):
 
 # Combine seasonal arrays to dataset
 var_seasons = [
-    'temp_DJF', 'prcp_DJF', 'temp_MAM', 'prcp_MAM', 
-    'temp_JJA', 'prcp_JJA', 'temp_SON', 'prcp_SON']
+    'temp_DJF', 'temp_MAM', 'temp_JJA', 'temp_SON', 
+    'prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']
 ds_season = xr.Dataset(dict(zip(var_seasons, das_season)))
+
+# Calculate mean in annual air temperature 
+T_mu = ds['temp'].mean(dim='day')
+T_mu.attrs = {
+    'long_name': 'Mean annual 2-m air temperature', 
+    'units': ds['temp'].units}
+ds_season['T_mu'] = T_mu
 
 # Calculate seasonal amplitude in daily air temperature 
 # (and add to seasonal dataset)
@@ -150,8 +157,10 @@ from sklearn.neighbors import BallTree
 def get_nearest(
     src_points, candidates, k_neighbors=1):
     """
-    Find nearest neighbors for all source points from a set of 
-    candidate points.
+    Find nearest neighbors for all source points from a set of candidate points.
+    src_points {pandas.core.frame.DataFrame}: Source locations to match to nearest neighbor in search set, with variables for longitude ('lon') and latitude ('lat'). Both should be prescribed in radians instead of degrees.
+    candidates {pandas.core.frame.DataFrame}: Candidate locations in which to search for nearest neighbors, with variables for longitude ('lon') and latitude ('lat'). Both should be prescribed in radians rather than degrees.
+    k_neighbors {int}: How many neighbors to return (defaults to 1 per source point).
     """
 
     # Create tree from the candidate points
@@ -170,14 +179,16 @@ def get_nearest(
 def extract_at_pts(
     xr_ds, gdf_pts, coord_names=['lon','lat'], 
     return_dist=False, planet_radius=6371000):
-
     """
-    Function where given an xr-dataset and a Point-based geodataframe, 
+    Function where, given an xr-dataset and a Point-based geodataframe, 
     extract all values of variables in xr-dataset at pixels nearest 
     the given points in the geodataframe.
+    xr_ds {xarray.core.dataset.Dataset}: Xarray dataset containing variables to extract.
+    gdf_pts {geopandas.geodataframe.GeoDataFrame} : A Points-based geodataframe containing the locations at which to extract xrarray variables.
+    coord_names {list}: The names of the longitude and latitude coordinates within xr_ds.
+    return_dist {bool}: Whether function to append the distance (in meters) between the given queried points and the nearest raster pixel centroids. 
     NOTE: This assumes the xr-dataset includes lon/lat in the coordinates 
-    (although they can be named anything, as this can be prescribed in the
-    `coord_names` variable).
+    (although they can be named anything, as this can be prescribed in the `coord_names` variable).
     """
     # Convert xr dataset to df and extract coordinates
     xr_df = xr_ds.to_dataframe().reset_index()
@@ -185,7 +196,7 @@ def extract_at_pts(
 
     # Ensure gdf_pts is in lon/lat and extract coordinates
     crs_end = gdf_pts.crs 
-    gdf_pts.to_crs(epsg=4326)
+    gdf_pts.to_crs(epsg=4326, inplace=True)
     pt_coord = pd.DataFrame(
         {'Lon': gdf_pts.geometry.x, 
         'Lat': gdf_pts.geometry.y}).reset_index(drop=True)
@@ -194,24 +205,79 @@ def extract_at_pts(
     xr_coord = xr_coord*np.pi/180
     pt_coord = pt_coord*np.pi/180
 
+    # Find xr data nearest given points
     xr_idx, xr_dist = get_nearest(pt_coord, xr_coord)
 
+    # Drop coordinate data from xr (leaves raster values)
     cols_drop = list(dict(xr_ds.coords).keys())
     xr_df_filt = xr_df.iloc[xr_idx].drop(
         cols_drop, axis=1).reset_index(drop=True)
     
-
+    # Add raster values to geodf
     gdf_return = gdf_pts.reset_index(
         drop=True).join(xr_df_filt)
     
+    # Add distance between raster center and points to gdf
     if return_dist:
         gdf_return['dist_m'] = xr_dist * planet_radius
     
     # Reproject results back to original projection
-    gdf_return.to_crs(crs_end)
+    gdf_return.to_crs(crs_end, inplace=True)
 
     return gdf_return
 
 # Get climate variables from xarray dataset
 gdf_clim = extract_at_pts(
     ds_season, RGI_gdf, return_dist=True)
+
+## Perform k-means clustering on glacier data
+
+# Additional module loading
+import seaborn as sns
+import matplotlib.pyplot as plt
+from scipy.stats import probplot
+from sklearn.cluster import KMeans
+
+# Normalize data variables
+norm_df = pd.DataFrame(
+    gdf_clim.drop(
+        ['RGIId', 'GLIMSId', 'geometry', 'dist_m'], 
+        axis=1))
+norm_df['Lon'] = gdf_clim.geometry.x
+norm_df['Lat'] = gdf_clim.geometry.y
+norm_df = (
+    norm_df-norm_df.mean())/norm_df.std()
+
+# Exploration of general data
+pplt_geo = sns.pairplot(
+    norm_df[
+        ['Lon', 'Lat', 'Zmed', 'T_mu', 
+        'T_amp', 'P_tot']].sample(frac=0.10), 
+    kind="kde", corner=True)
+
+# Exploration of temp data
+# probplot(norm_df['T_amp'], plot=plt)
+pplt_temp = sns.pairplot(
+    norm_df[
+        ['T_mu', 'T_amp', 'temp_DJF', 'temp_MAM', 
+        'temp_JJA', 'temp_SON']].sample(frac=0.10), 
+    kind="kde", corner=True)
+
+# Exploration of prcp data
+ppt_prcp = sns.pairplot(
+    norm_df[
+        ['P_tot', 'prcp_DJF', 'prcp_MAM', 
+        'prcp_JJA', 'prcp_SON']].sample(frac=0.10), 
+    kind="kde", corner=True)
+
+
+
+
+
+## Exploratory dimensionality reduction with PCA
+
+# New variable subset based on exploration
+pca_df = norm_df[
+    ['Lon', 'Lat', 'Zmed', 'T_mu', 'T_amp', 'P_tot', 
+    'temp_DJF', 'temp_MAM', 'temp_JJA', 'temp_SON', 
+    'prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']]

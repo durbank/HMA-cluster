@@ -123,6 +123,46 @@ P_tot.attrs = {
 ds_season['P_tot'] = P_tot
 
 
+# Assign static variables of interest (and names to use)
+vars_static = ['hgt']
+static_names = ['har_elev']
+
+# Import static variables
+das_static = []
+for var in vars_static:
+
+    # Subset files to those matching regex of current variable
+    var_regex = r".+_" + "static_" + re.escape(var)
+    file = sorted([fn for fn in har_fn if re.search(var_regex, fn)])
+
+    # Import xarray
+    da = xr.open_dataarray(DATA_DIR.joinpath('har-data', file[0]))
+
+    # Drop time dimension (bc data are static)
+    da_static = da.mean(dim='time')
+
+    # Assign attributes
+    da_static.attrs = da.attrs
+
+    das_static.append(da_static)
+
+# Combine static xr arrays into single xr dataset
+ds_static = xr.Dataset(dict(zip(static_names, das_static)))
+
+# # Combine ds_season results with ds_static
+# ds_season = ds_season.merge(ds_static, compat='override')
+
+##########
+# Issues with mismatched lon/lat coordinates 
+# (possibly rounding error?)
+# Manually add array for elevation to ds_season
+ds_season['har_elev'] = xr.DataArray(
+    data=ds_static['har_elev'].data, coords=ds_season.coords, 
+    attrs=ds_static['har_elev'].attrs, 
+    name=ds_static['har_elev'].name)
+
+##########
+
 
 
 # Load glacier outlines
@@ -227,16 +267,31 @@ def extract_at_pts(
     return gdf_return
 
 # Get climate variables from xarray dataset
-gdf_clim = extract_at_pts(
-    ds_season, RGI_gdf, return_dist=True)
+gdf_clim = extract_at_pts(ds_season, RGI_gdf)
 
-## Perform k-means clustering on glacier data
+## Compare HAR elev to RGI elev to determine biases
 
-# Additional module loading
-import seaborn as sns
-import matplotlib.pyplot as plt
-from scipy.stats import probplot
-from sklearn.cluster import KMeans
+Z_res = gdf_clim.har_elev - gdf_clim.Zmed
+Z_res.plot(kind='density')
+print(Z_res.describe())
+gdf_Zres = gpd.GeoDataFrame(
+    data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
+    crs=gdf_clim.crs)
+# gdf_Zres.plot(column='Z_res', legend=True)
+
+
+# import geoviews as gv
+# gv.extension('bokeh')
+# gv.Points(
+#     data=gdf_Zres, vdims=['Z_res']).opts(
+#         color='Z_res', cmap='gwv_r', colorbar=True, 
+#         size=5, tools=['hover'], width=750,
+#         height=500).redim.range(Z_res=(-2000,2000))
+
+
+## Explore dimensionality reduction to select variables
+
+from sklearn import decomposition as decomp
 
 # Normalize data variables
 norm_df = pd.DataFrame(
@@ -247,6 +302,60 @@ norm_df['Lon'] = gdf_clim.geometry.x
 norm_df['Lat'] = gdf_clim.geometry.y
 norm_df = (
     norm_df-norm_df.mean())/norm_df.std()
+
+
+pca = decomp.PCA()
+pca.fit(norm_df)
+X = pca.transform(norm_df)
+
+
+## Perform k-means clustering on glacier data
+
+# Additional module loading
+from sklearn.cluster import KMeans
+from sklearn import metrics
+import matplotlib.pyplot as plt
+
+
+clust_df = norm_df[
+    ['Zmed', 'T_mu', 'T_amp', 'temp_DJF', 'temp_JJA', 
+    'P_tot', 'prcp_DJF', 'prcp_JJA', 'Lon', 'Lat']]
+# clust_df.drop(['Lon', 'Lat'], axis=1, inplace=True)
+
+ks = range(1,11)
+scores = []
+
+for k in ks:
+    model = KMeans(n_clusters=k)
+    model.fit_predict(clust_df)
+    scores.append(-model.score(clust_df))
+
+plt.plot(ks, scores)
+plt.ylabel('Total intra-cluster distance')
+plt.xlabel('k')
+plt.show()
+
+
+
+grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
+
+clust_gdf = gdf_clim.copy()
+clust_gdf['cluster'] = grp_pred
+
+clust_gdf.sample(10000).plot(column='cluster')
+
+
+
+
+
+
+
+
+
+
+import seaborn as sns
+
+from scipy.stats import probplot
 
 # Exploration of general data
 pplt_geo = sns.pairplot(

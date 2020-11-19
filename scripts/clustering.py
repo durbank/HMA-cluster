@@ -6,6 +6,13 @@ import geopandas as gpd
 import xarray as xr
 import numpy as np
 from pathlib import Path
+from sklearn.cluster import KMeans
+from sklearn import metrics
+import matplotlib.pyplot as plt
+import geoviews as gv
+gv.extension('bokeh')
+import holoviews as hv
+hv.extension('bokeh')
 
 # Environment setup
 ROOT_DIR = Path(__file__).parents[1]
@@ -95,8 +102,8 @@ for i, season in enumerate(seasons):
 
 # Combine seasonal arrays to dataset
 var_seasons = [
-    'temp_DJF', 'temp_MAM', 'temp_JJA', 'temp_SON', 
-    'prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']
+    'temp_DJF', 'prcp_DJF', 'temp_MAM', 'prcp_MAM', 
+    'temp_JJA', 'prcp_JJA', 'temp_SON', 'prcp_SON']
 ds_season = xr.Dataset(dict(zip(var_seasons, das_season)))
 
 # Calculate mean in annual air temperature 
@@ -269,34 +276,17 @@ def extract_at_pts(
 # Get climate variables from xarray dataset
 gdf_clim = extract_at_pts(ds_season, RGI_gdf)
 
-## Compare HAR elev to RGI elev to determine biases
 
-Z_res = gdf_clim.har_elev - gdf_clim.Zmed
-Z_res.plot(kind='density')
-print(Z_res.describe())
-gdf_Zres = gpd.GeoDataFrame(
-    data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
-    crs=gdf_clim.crs)
-# gdf_Zres.plot(column='Z_res', legend=True)
+# Recalculate T_amp based on difference between
+# mean summer T and mean winter T (addresses
+# issue of single bad values biasing values)
+gdf_clim['T_amp'] = gdf_clim['temp_JJA'] -  gdf_clim['temp_DJF']
 
-
-# import geoviews as gv
-# gv.extension('bokeh')
-# gv.Points(
-#     data=gdf_Zres, vdims=['Z_res']).opts(
-#         color='Z_res', cmap='gwv_r', colorbar=True, 
-#         size=5, tools=['hover'], width=750,
-#         height=500).redim.range(Z_res=(-2000,2000))
-
-
-## Explore dimensionality reduction to select variables
-
-from sklearn import decomposition as decomp
 
 # Normalize data variables
 norm_df = pd.DataFrame(
     gdf_clim.drop(
-        ['RGIId', 'GLIMSId', 'geometry', 'dist_m'], 
+        ['RGIId', 'GLIMSId', 'geometry'], 
         axis=1))
 norm_df['Lon'] = gdf_clim.geometry.x
 norm_df['Lat'] = gdf_clim.geometry.y
@@ -304,23 +294,23 @@ norm_df = (
     norm_df-norm_df.mean())/norm_df.std()
 
 
-pca = decomp.PCA()
-pca.fit(norm_df)
-X = pca.transform(norm_df)
+## Explore dimensionality reduction to select variables
+
+# from sklearn import decomposition as decomp
+# pca = decomp.PCA()
+# pca.fit(norm_df)
+# X = pca.transform(norm_df)
 
 
 ## Perform k-means clustering on glacier data
 
-# Additional module loading
-from sklearn.cluster import KMeans
-from sklearn import metrics
-import matplotlib.pyplot as plt
 
-
+# clust_df = norm_df.drop(
+#     ['Area', 'Slope', 'Aspect', 'Lmax'], axis=1)
 clust_df = norm_df[
-    ['Zmed', 'T_mu', 'T_amp', 'temp_DJF', 'temp_JJA', 
-    'P_tot', 'prcp_DJF', 'prcp_JJA', 'Lon', 'Lat']]
-# clust_df.drop(['Lon', 'Lat'], axis=1, inplace=True)
+    ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
+    'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
+    'temp_SON', 'prcp_SON']]
 
 ks = range(1,11)
 scores = []
@@ -336,13 +326,264 @@ plt.xlabel('k')
 plt.show()
 
 
-
+# Cluster predictions
 grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
 
+# Add cluster numbers to gdf
 clust_gdf = gdf_clim.copy()
 clust_gdf['cluster'] = grp_pred
 
-clust_gdf.sample(10000).plot(column='cluster')
+# Reassign clusters to consistent naming convention
+# (KMeans randomly assigned cluster value)
+clust_num = clust_gdf.cluster.values
+tmp = clust_gdf.groupby('cluster').mean()
+clust_alpha = np.repeat('NA', len(clust_num))
+clust_alpha[clust_num == tmp['Zmed'].idxmax()] = 'A'
+clust_alpha[clust_num == tmp['Area'].idxmax()] = 'B'
+clust_alpha[clust_num == tmp['Area'].idxmin()] = 'D'
+clust_alpha[clust_alpha == 'NA'] = 'C'
+clust_gdf['cluster'] = clust_alpha
+
+my_cmap = {'A':'#66C2A5', 'B':'#FC8D62', 'C':'#8DA0CB', 'D':'#E78AC3'}
+cluster0_plt = gv.Points(
+    data=clust_gdf.sample(10000), vdims=['cluster']).opts(
+        color='cluster', colorbar=True, cmap=my_cmap, 
+        size=5, tools=['hover'], width=750,
+        height=500)
+# cluster0_plt
+
+
+
+from sklearn.linear_model import LinearRegression
+def correct_lapse(
+    geodf, x_name, y_name, xTrue_name, y_others=None, 
+    show_plts=False):
+    """
+
+    """
+
+    # Find best fit temperature lapse rate
+    X = geodf[x_name].to_numpy()
+    y = geodf[y_name].to_numpy()
+    reg = LinearRegression().fit(X.reshape(-1,1), y)
+    
+    # Define variable lapse rate
+    lapse_rate = reg.coef_[0]
+
+    # Correct data based on lapse rate
+    y_correct = y + lapse_rate*(
+        geodf[xTrue_name].to_numpy() - X)
+    
+    # Add corrected values to new gdf
+    new_df = geodf.copy()
+    new_df[y_name] = y_correct
+
+    if show_plts:
+        # Diagnostic plot
+        x_lin = np.linspace(X.min(), X.max())
+        y_lin = reg.predict(x_lin.reshape(-1,1))
+        plt.scatter(X,y)
+        plt.plot(x_lin, y_lin, color='red')
+        plt.show()
+
+        # Diagnostic plot
+        plt.scatter(y, y_correct)
+        plt.plot(
+            [y_correct.min(), y.max()], 
+            [y_correct.min(), y.max()], 
+            color='black')
+        plt.show()
+    
+    if y_others:
+        for name in y_others:
+            y = geodf[name].to_numpy()
+
+            # Correct data based on lapse rate
+            y_correct = y + lapse_rate*(
+                geodf[xTrue_name].to_numpy() - X)
+
+            # Add corrected values to geodf
+            new_df[name] = y_correct
+
+    return new_df
+
+
+# seasons_T = ['temp_DJF', 'temp_MAM', 'temp_JJA', 'temp_SON']
+# clust_correct1 = clust_gdf.groupby('cluster').apply(
+#     lambda x: correct_lapse(
+#         x, x_name='har_elev', y_name='T_mu', 
+#         xTrue_name='Zmed', y_others=seasons_T))
+
+# seasons_P = ['prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']
+# clust_correct1 = clust_gdf.groupby('cluster').apply(
+#     lambda x: correct_lapse(
+#         x, x_name='har_elev', y_name='P_tot', 
+#         xTrue_name='Zmed', y_others=seasons_P))
+
+vars_all = [
+    'T_mu', 'P_tot', 'temp_DJF', 'temp_MAM', 
+    'temp_JJA', 'temp_SON', 'prcp_DJF', 'prcp_MAM', 
+    'prcp_JJA', 'prcp_SON']
+clust_correct = clust_gdf.copy()
+for var in vars_all:
+
+    clust_correct = clust_correct.groupby('cluster').apply(
+        lambda x: correct_lapse(
+            x, x_name='har_elev', y_name=var, 
+            xTrue_name='Zmed'))
+
+
+# Recalculate T_amp based on difference between
+# mean summer T and mean winter T (addresses
+# issue of single bad values biasing values)
+clust_correct['T_amp'] = (
+    clust_correct['temp_JJA'] 
+    - clust_correct['temp_DJF'])
+
+# Drop deprecated variables
+clust_correct.drop(
+    ['har_elev', 'cluster'], axis=1, inplace=True)
+
+
+# Normalize data variables
+norm_df = pd.DataFrame(
+    clust_correct.drop(
+        ['RGIId', 'GLIMSId', 'geometry'], 
+        axis=1))
+norm_df['Lon'] = clust_correct.geometry.x
+norm_df['Lat'] = clust_correct.geometry.y
+norm_df = (
+    norm_df-norm_df.mean())/norm_df.std()
+
+clust_df = norm_df[
+    ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
+    'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
+    'temp_SON', 'prcp_SON']]
+
+# Cluster predictions
+grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
+
+# Add cluster numbers to gdf
+clust_gdf = clust_correct
+clust_gdf['cluster'] = grp_pred
+
+# Reassign clusters to consistent naming convention
+# (KMeans randomly assigned cluster value)
+clust_num = clust_gdf.cluster.values
+tmp = clust_gdf.groupby('cluster').mean()
+clust_alpha = np.repeat('NA', len(clust_num))
+clust_alpha[clust_num == tmp['Zmed'].idxmax()] = 'A'
+clust_alpha[clust_num == tmp['Area'].idxmax()] = 'B'
+clust_alpha[clust_num == tmp['Area'].idxmin()] = 'D'
+clust_alpha[clust_alpha == 'NA'] = 'C'
+clust_gdf['cluster'] = clust_alpha
+
+# my_cmap = {'A':'#66C2A5', 'B':'#FC8D62', 'C':'#8DA0CB', 'D':'#E78AC3'}
+noLoc_plt = gv.Points(
+    data=clust_gdf.sample(10000), vdims=['cluster']).opts(
+        color='cluster', colorbar=True, cmap=my_cmap, 
+        size=5, tools=['hover'], width=750,
+        height=500)
+
+
+
+clust_gdf2 = clust_correct.copy()
+clust_df = norm_df[
+    ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
+    'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
+    'temp_SON', 'prcp_SON', 'Lat', 'Lon', 'Zmed']]
+grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
+clust_gdf2['cluster'] = grp_pred
+# Reassign clusters to consistent naming convention
+# (KMeans randomly assigned cluster value)
+clust_num = clust_gdf2.cluster.values
+tmp = clust_gdf2.groupby('cluster').mean()
+clust_alpha = np.repeat('NA', len(clust_num))
+clust_alpha[clust_num == tmp['Zmed'].idxmax()] = 'A'
+clust_alpha[clust_num == tmp['Lmax'].idxmax()] = 'B'
+clust_alpha[clust_num == tmp['Area'].idxmin()] = 'D'
+clust_alpha[clust_alpha == 'NA'] = 'C'
+clust_gdf2['cluster'] = clust_alpha
+
+Loc_plt = gv.Points(
+    data=clust_gdf2.sample(10000), vdims=['cluster']).opts(
+        color='cluster', colorbar=True, cmap=my_cmap, 
+        size=5, tools=['hover'], width=750,
+        height=500)
+
+(noLoc_plt + Loc_plt)
+
+
+
+
+
+# Display cluster stats
+clust_groups = clust_correct.groupby('cluster')
+print(clust_groups.mean())
+
+# Cluster A: 
+# - Represents 40% of glaciers in the dataset
+# - High elevation, cold, and dry
+# - Moderate-sized glaciers
+# - Mostly confined to western HMA
+# - Greatest precip in spring (closely followed by winter)
+
+# Cluster B:
+# - Represents 22% of glaciers in dataset
+# - Low elevation, mid-temperature, wetter
+# - Larger glaciers
+# - Westernmost cluster of glaciers
+# - Greatest precip in winter, closely followed by spring
+
+# Cluster C:
+# - Represents 6% of glaciers in dataset
+# - Mid elevation, warmest, wettest
+# - NOTE: HAR has this group as the lowest elevation (although looking at both distributions, the bulk of samples are pretty comparable)
+# - Small seasonal cycle in temperature
+# - Moderate-sized glaciers
+# - Consists of southern band of HMA
+# - Precip dominated by summer contribution
+
+# Cluster D:
+# - Represents 32% of glaciers in dataset
+# - Higher elevation, modest temperature, dry
+# - Small glaciers
+# - Mostly eastern HMA, but scattered throughout
+# - Precip dominated by summer contribution
+
+
+clust_groups['Zmed'].plot(kind='kde', legend=True)
+clust_groups['T_mu'].plot(kind='kde', legend=True)
+clust_groups['P_tot'].plot(kind='kde', legend=True)
+
+
+## Compare HAR elev to RGI elev to determine biases
+
+Z_res = gdf_clim.har_elev - gdf_clim.Zmed
+# Z_res.plot(kind='density')
+print(Z_res.describe())
+gdf_Zres = gpd.GeoDataFrame(
+    data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
+    crs=gdf_clim.crs)
+gv.Points(
+    data=gdf_Zres.sample(15000), vdims=['Z_res']).opts(
+        color='Z_res', cmap='gwv_r', colorbar=True, 
+        size=5, tools=['hover'], width=750,
+        height=500).redim.range(Z_res=(-2000,2000))
+
+
+one_to_one = hv.Curve(
+    data=pd.DataFrame(
+        {'x':[0,7850], 'y':[0,7850]}))
+scatt_yr = hv.Points(
+    data=pd.DataFrame(clust_gdf), 
+    kdims=['Zmed', 'har_elev'], 
+    vdims=['cluster']).groupby('cluster')
+(
+    one_to_one.opts(color='black') 
+    * scatt_yr.opts(
+        xlabel='RGI elevation (m)', 
+        ylabel='HAR elevation (m)'))
 
 
 
@@ -350,43 +591,41 @@ clust_gdf.sample(10000).plot(column='cluster')
 
 
 
+# import seaborn as sns
+
+# clust_sns_df = clust_gdf[
+#     ['Area', 'Zmed', 'temp_DJF', 'temp_JJA', 'T_mu', 'T_amp', 
+#     'prcp_DJF', 'prcp_JJA', 'P_tot', 'cluster']]
+# plt_hist = sns.pairplot(
+#     clust_sns_df.sample(frac=0.25), kind='kde', 
+#     hue='cluster', corner=True)
+
+# customPalette = sns.set_palette(sns.color_palette(list(my_cmap.values())))
+# sns.kdeplot(
+#     data=clust_gdf, x='Zmed', hue='cluster', 
+#     fill=True)
 
 
+# from scipy.stats import probplot
 
-import seaborn as sns
+# # Exploration of general data
+# pplt_geo = sns.pairplot(
+#     norm_df[
+#         ['Lon', 'Lat', 'Zmed', 'T_mu', 
+#         'T_amp', 'P_tot']].sample(frac=0.10), 
+#     kind="kde", corner=True)
 
-from scipy.stats import probplot
+# # Exploration of temp data
+# # probplot(norm_df['T_amp'], plot=plt)
+# pplt_temp = sns.pairplot(
+#     norm_df[
+#         ['T_mu', 'T_amp', 'temp_DJF', 'temp_MAM', 
+#         'temp_JJA', 'temp_SON']].sample(frac=0.10), 
+#     kind="kde", corner=True)
 
-# Exploration of general data
-pplt_geo = sns.pairplot(
-    norm_df[
-        ['Lon', 'Lat', 'Zmed', 'T_mu', 
-        'T_amp', 'P_tot']].sample(frac=0.10), 
-    kind="kde", corner=True)
-
-# Exploration of temp data
-# probplot(norm_df['T_amp'], plot=plt)
-pplt_temp = sns.pairplot(
-    norm_df[
-        ['T_mu', 'T_amp', 'temp_DJF', 'temp_MAM', 
-        'temp_JJA', 'temp_SON']].sample(frac=0.10), 
-    kind="kde", corner=True)
-
-# Exploration of prcp data
-ppt_prcp = sns.pairplot(
-    norm_df[
-        ['P_tot', 'prcp_DJF', 'prcp_MAM', 
-        'prcp_JJA', 'prcp_SON']].sample(frac=0.10), 
-    kind="kde", corner=True)
-
-
-
-
-
-## Exploratory dimensionality reduction with PCA
-
-# New variable subset based on exploration
-pca_df = norm_df[
-    ['Lon', 'Lat', 'Zmed', 'T_mu', 'T_amp', 'P_tot', 
-    'temp_DJF', 'temp_MAM', 'temp_JJA', 'temp_SON', 
-    'prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']]
+# # Exploration of prcp data
+# ppt_prcp = sns.pairplot(
+#     norm_df[
+#         ['P_tot', 'prcp_DJF', 'prcp_MAM', 
+#         'prcp_JJA', 'prcp_SON']].sample(frac=0.10), 
+#     kind="kde", corner=True)

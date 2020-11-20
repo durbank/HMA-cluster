@@ -1,13 +1,18 @@
 # Script to perform clustering of climate variables for HMA
 
+# %% Set environment
+
+# Import modules
 import re
 import pandas as pd
 import geopandas as gpd
 import xarray as xr
 import numpy as np
 from pathlib import Path
+from sklearn.neighbors import BallTree
 from sklearn.cluster import KMeans
 from sklearn import metrics
+from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 import geoviews as gv
 gv.extension('bokeh')
@@ -17,6 +22,8 @@ hv.extension('bokeh')
 # Environment setup
 ROOT_DIR = Path(__file__).parents[1]
 DATA_DIR = ROOT_DIR.joinpath('data')
+
+# %% Import and format HAR climate data
 
 # Get list of all downloaded climate files
 har_fn = [
@@ -129,6 +136,7 @@ P_tot.attrs = {
     'units': ds['prcp'].units}
 ds_season['P_tot'] = P_tot
 
+# %% Import and format HAR static data
 
 # Assign static variables of interest (and names to use)
 vars_static = ['hgt']
@@ -170,7 +178,7 @@ ds_season['har_elev'] = xr.DataArray(
 
 ##########
 
-
+# %% Import and format RGI data
 
 # Load glacier outlines
 RGI_files = list(DATA_DIR.joinpath('RGI-data').glob('*/*.shp'))
@@ -199,8 +207,8 @@ RGI_gdf = gpd.GeoDataFrame(
         RGI['CenLon'], RGI['CenLat']), 
     crs="EPSG:4326")
 
-# Functions for nearest neighbor search in xarray
-from sklearn.neighbors import BallTree
+# %% Extract HAR data at glacier locations
+
 def get_nearest(
     src_points, candidates, k_neighbors=1):
     """
@@ -276,12 +284,12 @@ def extract_at_pts(
 # Get climate variables from xarray dataset
 gdf_clim = extract_at_pts(ds_season, RGI_gdf)
 
-
 # Recalculate T_amp based on difference between
 # mean summer T and mean winter T (addresses
 # issue of single bad values biasing values)
 gdf_clim['T_amp'] = gdf_clim['temp_JJA'] -  gdf_clim['temp_DJF']
 
+# %% Perform initial clustering to determine k
 
 # Normalize data variables
 norm_df = pd.DataFrame(
@@ -325,6 +333,7 @@ plt.ylabel('Total intra-cluster distance')
 plt.xlabel('k')
 plt.show()
 
+# %% Initial k-clustering to determine groups for lapse rates
 
 # Cluster predictions
 grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
@@ -350,11 +359,41 @@ cluster0_plt = gv.Points(
         color='cluster', colorbar=True, cmap=my_cmap, 
         size=5, tools=['hover'], width=750,
         height=500)
-# cluster0_plt
+cluster0_plt
 
 
+# %% Compare HAR elev to RGI elev to determine biases
 
-from sklearn.linear_model import LinearRegression
+Z_res = gdf_clim.har_elev - gdf_clim.Zmed
+# Z_res.plot(kind='density')
+print(Z_res.describe())
+gdf_Zres = gpd.GeoDataFrame(
+    data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
+    crs=gdf_clim.crs)
+elevRES_plt = gv.Points(
+    data=gdf_Zres.sample(15000), vdims=['Z_res']).opts(
+        color='Z_res', cmap='gwv_r', colorbar=True, 
+        size=5, tools=['hover'], width=750,
+        height=500).redim.range(Z_res=(-2000,2000))
+elevRES_plt
+
+# %% Additional plot for per-cluster biases
+
+one_to_one = hv.Curve(
+    data=pd.DataFrame(
+        {'x':[0,7850], 'y':[0,7850]}))
+scatt_elev = hv.Points(
+    data=pd.DataFrame(clust_gdf), 
+    kdims=['Zmed', 'har_elev'], 
+    vdims=['cluster']).groupby('cluster')
+(
+    one_to_one.opts(color='black') 
+    * scatt_elev.opts(
+        xlabel='RGI elevation (m)', 
+        ylabel='HAR elevation (m)'))
+
+# %% Correct climate data based on per-cluster lapse rates
+
 def correct_lapse(
     geodf, x_name, y_name, xTrue_name, y_others=None, 
     show_plts=False):
@@ -444,6 +483,7 @@ clust_correct['T_amp'] = (
 clust_correct.drop(
     ['har_elev', 'cluster'], axis=1, inplace=True)
 
+# %% Generate new (only-climate) clusters based on corrected climate data
 
 # Normalize data variables
 norm_df = pd.DataFrame(
@@ -464,34 +504,34 @@ clust_df = norm_df[
 grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
 
 # Add cluster numbers to gdf
-clust_gdf = clust_correct
-clust_gdf['cluster'] = grp_pred
+clust_gdf1 = clust_correct
+clust_gdf1['cluster'] = grp_pred
 
 # Reassign clusters to consistent naming convention
 # (KMeans randomly assigned cluster value)
-clust_num = clust_gdf.cluster.values
-tmp = clust_gdf.groupby('cluster').mean()
+clust_num = clust_gdf1.cluster.values
+tmp = clust_gdf1.groupby('cluster').mean()
 clust_alpha = np.repeat('NA', len(clust_num))
 clust_alpha[clust_num == tmp['Zmed'].idxmax()] = 'A'
 clust_alpha[clust_num == tmp['Area'].idxmax()] = 'B'
 clust_alpha[clust_num == tmp['Area'].idxmin()] = 'D'
 clust_alpha[clust_alpha == 'NA'] = 'C'
-clust_gdf['cluster'] = clust_alpha
+clust_gdf1['cluster'] = clust_alpha
 
 # my_cmap = {'A':'#66C2A5', 'B':'#FC8D62', 'C':'#8DA0CB', 'D':'#E78AC3'}
 noLoc_plt = gv.Points(
-    data=clust_gdf.sample(10000), vdims=['cluster']).opts(
+    data=clust_gdf1.sample(10000), vdims=['cluster']).opts(
         color='cluster', colorbar=True, cmap=my_cmap, 
         size=5, tools=['hover'], width=750,
         height=500)
 
-
+# %% Generate clusters based on climate and elevation
 
 clust_gdf2 = clust_correct.copy()
 clust_df = norm_df[
     ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
     'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
-    'temp_SON', 'prcp_SON', 'Lat', 'Lon', 'Zmed']]
+    'temp_SON', 'prcp_SON', 'Zmed']]
 grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
 clust_gdf2['cluster'] = grp_pred
 # Reassign clusters to consistent naming convention
@@ -513,13 +553,43 @@ Loc_plt = gv.Points(
 
 (noLoc_plt + Loc_plt)
 
-
-
-
+# %% Cluster statistics and exploration
 
 # Display cluster stats
-clust_groups = clust_correct.groupby('cluster')
-print(clust_groups.mean())
+clust_groups1 = clust_gdf1.groupby('cluster')
+print(clust_groups1.mean())
+clust_groups2 = clust_gdf2.groupby('cluster')
+print(clust_groups2.mean())
+
+clust_res = (
+    pd.DataFrame(clust_groups1.mean()) 
+    - pd.DataFrame(clust_groups2.mean())
+    ) / pd.DataFrame(clust_groups1.mean())
+print(clust_res)
+
+cnt_1 = clust_groups1.count() / clust_gdf1.shape[0]
+cnt_2 = clust_groups2.count() / clust_gdf2.shape[0]
+grp_perc = pd.concat([cnt_1.iloc[:,1], cnt_2.iloc[:,1]], axis=1)
+grp_perc.columns = ['CLIM', 'CLIM_Z'] 
+
+
+fig, ax = plt.subplots()
+for key, group in clust_groups1:
+    group[var_i].plot(ax=ax, kind='kde', label=key, 
+    color=my_cmap[key], legend=True)
+for key, group in clust_groups2:
+    group[var_i].plot(ax=ax, kind='kde', label=key, 
+    color=my_cmap[key], linestyle='--', legend=False)
+ax.set_xlim(
+    (np.min(clust_groups1.min()[var_i]), 
+    np.max(clust_groups1.max()[var_i])))
+plt.show()
+
+# clust_groups['T_mu'].plot(kind='kde', legend=True)
+# clust_groups['P_tot'].plot(kind='kde', legend=True)
+
+
+# %%
 
 # Cluster A: 
 # - Represents 40% of glaciers in the dataset
@@ -552,38 +622,7 @@ print(clust_groups.mean())
 # - Precip dominated by summer contribution
 
 
-clust_groups['Zmed'].plot(kind='kde', legend=True)
-clust_groups['T_mu'].plot(kind='kde', legend=True)
-clust_groups['P_tot'].plot(kind='kde', legend=True)
 
-
-## Compare HAR elev to RGI elev to determine biases
-
-Z_res = gdf_clim.har_elev - gdf_clim.Zmed
-# Z_res.plot(kind='density')
-print(Z_res.describe())
-gdf_Zres = gpd.GeoDataFrame(
-    data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
-    crs=gdf_clim.crs)
-gv.Points(
-    data=gdf_Zres.sample(15000), vdims=['Z_res']).opts(
-        color='Z_res', cmap='gwv_r', colorbar=True, 
-        size=5, tools=['hover'], width=750,
-        height=500).redim.range(Z_res=(-2000,2000))
-
-
-one_to_one = hv.Curve(
-    data=pd.DataFrame(
-        {'x':[0,7850], 'y':[0,7850]}))
-scatt_yr = hv.Points(
-    data=pd.DataFrame(clust_gdf), 
-    kdims=['Zmed', 'har_elev'], 
-    vdims=['cluster']).groupby('cluster')
-(
-    one_to_one.opts(color='black') 
-    * scatt_yr.opts(
-        xlabel='RGI elevation (m)', 
-        ylabel='HAR elevation (m)'))
 
 
 

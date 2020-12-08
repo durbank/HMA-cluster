@@ -74,7 +74,8 @@ for var in vars_2d:
 # Combine 2D xr arrays into single xr dataset
 ds = xr.Dataset(dict(zip(var_names, das)))
 
-# Convert prcp from rainfall intensity to total precipitation
+# Convert prcp from rainfall intensity to total 
+# daily precipitation
 ds['prcp'] = 24*ds['prcp']
 ds['prcp'].attrs = {
     'long_name': 'total daily precipitation', 
@@ -312,13 +313,14 @@ norm_df = (
 
 ## Perform k-means clustering on glacier data
 
-
-# clust_df = norm_df.drop(
-#     ['Area', 'Slope', 'Aspect', 'Lmax'], axis=1)
 clust_df = norm_df[
-    ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
+    ['T_mu', 'P_tot', 'temp_DJF', 'prcp_DJF', 
     'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
     'temp_SON', 'prcp_SON']]
+# clust_df = norm_df[
+#     ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
+#     'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
+#     'temp_SON', 'prcp_SON']]
 
 ks = range(1,11)
 scores = []
@@ -423,6 +425,8 @@ def correct_lapse(
         y_lin = reg.predict(x_lin.reshape(-1,1))
         plt.scatter(X,y)
         plt.plot(x_lin, y_lin, color='red')
+        plt.xlabel(xTrue_name)
+        plt.ylabel(y_name)
         plt.show()
 
         # Diagnostic plot
@@ -431,6 +435,8 @@ def correct_lapse(
             [y_correct.min(), y.max()], 
             [y_correct.min(), y.max()], 
             color='black')
+        plt.xlabel(y_name)
+        plt.ylabel(y_name+' corrected')
         plt.show()
     
     if y_others:
@@ -453,18 +459,16 @@ def correct_lapse(
 #         x, x_name='har_elev', y_name='T_mu', 
 #         xTrue_name='Zmed', y_others=seasons_T))
 
-# seasons_P = ['prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']
-# clust_correct1 = clust_gdf.groupby('cluster').apply(
-#     lambda x: correct_lapse(
-#         x, x_name='har_elev', y_name='P_tot', 
-#         xTrue_name='Zmed', y_others=seasons_P))
 
-vars_all = [
-    'T_mu', 'P_tot', 'temp_DJF', 'temp_MAM', 
-    'temp_JJA', 'temp_SON', 'prcp_DJF', 'prcp_MAM', 
-    'prcp_JJA', 'prcp_SON']
+vars_correct = [
+    'T_mu', 'temp_DJF', 'temp_MAM', 
+    'temp_JJA', 'temp_SON']
+# vars_correct = [
+#     'T_mu', 'P_tot', 'temp_DJF', 'temp_MAM', 
+#     'temp_JJA', 'temp_SON', 'prcp_DJF', 'prcp_MAM', 
+#     'prcp_JJA', 'prcp_SON']
 clust_correct = clust_gdf.copy()
-for var in vars_all:
+for var in vars_correct:
 
     clust_correct = clust_correct.groupby('cluster').apply(
         lambda x: correct_lapse(
@@ -473,8 +477,8 @@ for var in vars_all:
 
 
 # Recalculate T_amp based on difference between
-# mean summer T and mean winter T (addresses
-# issue of single bad values biasing values)
+# corrected mean summer T and corrected 
+# mean winter T
 clust_correct['T_amp'] = (
     clust_correct['temp_JJA'] 
     - clust_correct['temp_DJF'])
@@ -568,28 +572,31 @@ clust_groups2 = clust_gdf2.groupby('cluster')
 # print(clust_groups2.mean().drop(cols_drop, axis=1))
 
 clust_res = (
-    pd.DataFrame(clust_groups1.mean()) 
-    - pd.DataFrame(clust_groups2.mean())
-    ) / pd.DataFrame(clust_groups1.mean())
+    pd.DataFrame(clust_groups2.median()) 
+    - pd.DataFrame(clust_groups1.median())
+    ) / pd.DataFrame(clust_groups1.median())
 print(clust_res)
 
 cnt_1 = clust_groups1.count() / clust_gdf1.shape[0]
 cnt_2 = clust_groups2.count() / clust_gdf2.shape[0]
 grp_perc = pd.concat([cnt_1.iloc[:,1], cnt_2.iloc[:,1]], axis=1)
-grp_perc.columns = ['CLIM', 'CLIM_Z'] 
+grp_perc.columns = ['CLIM', 'CLIM_Z']
+print(grp_perc)
 
-
+# plt_vars = clust_df.columns
 plt_vars = [
     'Area', 'Zmed', 'prcp_DJF', 'prcp_MAM', 
     'prcp_JJA', 'prcp_SON', 'P_tot']
 for var in plt_vars:
     fig, ax = plt.subplots()
     for key, group in clust_groups1:
-        group[var].plot(ax=ax, kind='kde', label=key, 
-        color=my_cmap[key], legend=True)
+        group[var].plot(ax=ax, kind='kde', 
+            label=key, color=my_cmap[key], 
+            legend=True)
     for key, group in clust_groups2:
-        group[var].plot(ax=ax, kind='kde', label=key, 
-        color=my_cmap[key], linestyle='--', legend=False)
+        group[var].plot(ax=ax, kind='kde', 
+        label=key, color=my_cmap[key], 
+        linestyle='--', legend=False)
     ax.set_xlim(
         (np.min(clust_groups1.min()[var]), 
         np.max(clust_groups1.max()[var])))
@@ -599,6 +606,53 @@ for var in plt_vars:
 # clust_groups['T_mu'].plot(kind='kde', legend=True)
 # clust_groups['P_tot'].plot(kind='kde', legend=True)
 
+
+# %%
+
+# Find fraction of P_tot for each season
+Pfrac_gdf = clust_gdf1.copy()
+Pfrac_gdf['prcp_DJF'] = clust_gdf1.apply(
+    lambda row: row.prcp_DJF/row.P_tot, axis=1)
+Pfrac_gdf['prcp_MAM'] = clust_gdf1.apply(
+    lambda row: row.prcp_MAM/row.P_tot, axis=1)
+Pfrac_gdf['prcp_JJA'] = clust_gdf1.apply(
+    lambda row: row.prcp_JJA/row.P_tot, axis=1)
+Pfrac_gdf['prcp_SON'] = clust_gdf1.apply(
+    lambda row: row.prcp_SON/row.P_tot, axis=1)
+
+
+clipping = {'min': 'red'}
+
+DJF_frac_plt = gv.Points(
+    data=Pfrac_gdf.sample(10000), 
+    vdims=['prcp_DJF']).opts(
+        color='prcp_DJF', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=750, height=500)
+MAM_frac_plt = gv.Points(
+    data=Pfrac_gdf.sample(10000), 
+    vdims=['prcp_MAM']).opts(
+        color='prcp_MAM', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=750, height=500)
+JJA_frac_plt = gv.Points(
+    data=Pfrac_gdf.sample(10000), 
+    vdims=['prcp_JJA']).opts(
+        color='prcp_JJA', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=750, height=500)
+SON_frac_plt = gv.Points(
+    data=Pfrac_gdf.sample(10000), 
+    vdims=['prcp_SON']).opts(
+        color='prcp_SON', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=750, height=500)
+
+
+DJF_frac_plt.redim.range(prcp_DJF=(0,1))
+MAM_frac_plt.redim.range(prcp_MAM=(0,1))
+JJA_frac_plt.redim.range(prcp_JJA=(0,1))
+SON_frac_plt.redim.range(prcp_SON=(0,1))
 
 # %%
 

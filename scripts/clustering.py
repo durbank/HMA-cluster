@@ -501,10 +501,12 @@ clust_df = norm_df[
     'temp_SON', 'prcp_SON']]
 
 # Cluster predictions
-grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
+model = KMeans(n_clusters=k)
+grp_pred = model.fit_predict(clust_df)
+score1 = -model.score(clust_df)
 
 # Add cluster numbers to gdf
-clust_gdf1 = clust_correct
+clust_gdf1 = clust_correct.copy()
 clust_gdf1['cluster'] = grp_pred
 
 # Reassign clusters to consistent naming convention
@@ -532,7 +534,11 @@ clust_df = norm_df[
     ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 'prcp_DJF', 
     'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
     'temp_SON', 'prcp_SON', 'Zmed']]
-grp_pred = KMeans(n_clusters=4).fit_predict(clust_df)
+
+model = KMeans(n_clusters=k)
+grp_pred = model.fit_predict(clust_df)
+score2 = -model.score(clust_df)
+
 clust_gdf2['cluster'] = grp_pred
 # Reassign clusters to consistent naming convention
 # (KMeans randomly assigned cluster value)
@@ -557,9 +563,9 @@ Loc_plt = gv.Points(
 
 # Display cluster stats
 clust_groups1 = clust_gdf1.groupby('cluster')
-print(clust_groups1.mean())
+# print(clust_groups1.mean().drop(cols_drop, axis=1))
 clust_groups2 = clust_gdf2.groupby('cluster')
-print(clust_groups2.mean())
+# print(clust_groups2.mean().drop(cols_drop, axis=1))
 
 clust_res = (
     pd.DataFrame(clust_groups1.mean()) 
@@ -573,17 +579,22 @@ grp_perc = pd.concat([cnt_1.iloc[:,1], cnt_2.iloc[:,1]], axis=1)
 grp_perc.columns = ['CLIM', 'CLIM_Z'] 
 
 
-fig, ax = plt.subplots()
-for key, group in clust_groups1:
-    group[var_i].plot(ax=ax, kind='kde', label=key, 
-    color=my_cmap[key], legend=True)
-for key, group in clust_groups2:
-    group[var_i].plot(ax=ax, kind='kde', label=key, 
-    color=my_cmap[key], linestyle='--', legend=False)
-ax.set_xlim(
-    (np.min(clust_groups1.min()[var_i]), 
-    np.max(clust_groups1.max()[var_i])))
-plt.show()
+plt_vars = [
+    'Area', 'Zmed', 'prcp_DJF', 'prcp_MAM', 
+    'prcp_JJA', 'prcp_SON', 'P_tot']
+for var in plt_vars:
+    fig, ax = plt.subplots()
+    for key, group in clust_groups1:
+        group[var].plot(ax=ax, kind='kde', label=key, 
+        color=my_cmap[key], legend=True)
+    for key, group in clust_groups2:
+        group[var].plot(ax=ax, kind='kde', label=key, 
+        color=my_cmap[key], linestyle='--', legend=False)
+    ax.set_xlim(
+        (np.min(clust_groups1.min()[var]), 
+        np.max(clust_groups1.max()[var])))
+    ax.set_xlabel(var)
+    plt.show()
 
 # clust_groups['T_mu'].plot(kind='kde', legend=True)
 # clust_groups['P_tot'].plot(kind='kde', legend=True)

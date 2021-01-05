@@ -262,6 +262,11 @@ RGI.query(
     'area_m2 >= @a_min & area_m2 <= @a_max', 
     inplace=True)
 
+# Calculate hypsometric indices of glaciers
+HI = (RGI['z_max']-RGI['z_med']) / (RGI['z_med']-RGI['z_min'])
+HI[HI<1] = -1/HI[HI<1]
+RGI['HI'] = HI
+
 # Convert to gdf
 RGI_gdf = gpd.GeoDataFrame(
     RGI.drop(['Lon','Lat'], axis=1), 
@@ -358,7 +363,7 @@ gdf_clim.query('P_tot > 0', inplace=True)
 
 # Normalize data variables
 norm_df = pd.DataFrame(gdf_clim[
-    ['z_med', 'z_min', 'z_max', 'z_slope', 
+    ['z_med', 'z_min', 'z_max', 'z_slope', 'HI', 
     'z_aspect', 'dhdt_ma', 'mb_mwea', 'area_m2', 
     'mb_m3wea', 'temp_DJF', 'prcp_DJF', 'temp_MAM', 
     'prcp_MAM', 'temp_JJA', 'prcp_JJA', 'temp_SON', 
@@ -410,7 +415,7 @@ plt.show()
 # %% Initial k-clustering to determine groups for lapse rates
 
 # Cluster predictions
-k0 = 4
+k0 = 5
 grp_pred = KMeans(n_clusters=k0).fit_predict(pca_df)
 
 # Add cluster numbers to gdf
@@ -634,6 +639,21 @@ Ptot_plt + DJF_frac_plt.redim.range(prcp_DJF=(0,1))
     + JJA_frac_plt.redim.range(prcp_JJA=(0,1))
     + SON_frac_plt.redim.range(prcp_SON=(0,1))
 )
+
+# %% Random forest regression
+
+# from sklearn.ensemble import RandomForestRegressor as RFR
+
+# X = clust_correct[['z_med']]
+
+
+
+
+
+
+
+
+
 
 # %% PCA for dimensionality reduction of climate clusters
 

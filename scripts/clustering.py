@@ -29,7 +29,8 @@ DATA_DIR = ROOT_DIR.joinpath('data')
 
 # Get list of all downloaded climate files
 har_fn = [
-    p.name for p in list(DATA_DIR.joinpath('har-data').glob('*.nc'))]
+    p.name for p in list(
+        DATA_DIR.joinpath('har-data').glob('*.nc'))]
 
 # Assign 2D variables of interest (and names to use)
 vars_2d = ['t2', 'prcp']
@@ -41,26 +42,36 @@ for var in vars_2d:
 
     # Subset files to those matching regex of current variable
     var_regex = r".+_" + re.escape(var) + r"_(\d)+.+"
-    files = sorted([fn for fn in har_fn if re.search(var_regex, fn)])
+    files = sorted(
+        [fn for fn in har_fn if re.search(var_regex, fn)])
 
     # Intialize first year as new array with days-of-year dim 
-    tmp = xr.open_dataarray(DATA_DIR.joinpath('har-data', files[0]))
+    tmp = xr.open_dataarray(
+        DATA_DIR.joinpath('har-data', files[0]))
     da = xr.DataArray(
         data=tmp[0:365,:,:].data, 
         coords={
-            'day': np.arange(0,365), 'south_north': tmp.south_north, 
-            'west_east': tmp.west_east, 'lat':tmp.lat, 'lon':tmp.lon}, 
-        dims=['day', 'south_north', 'west_east'], attrs=tmp.attrs)
+            'day': np.arange(0,365), 
+            'south_north': tmp.south_north, 
+            'west_east': tmp.west_east, 
+            'lat':tmp.lat, 'lon':tmp.lon}, 
+        dims=['day', 'south_north', 'west_east'], 
+        attrs=tmp.attrs)
 
-    # Concatenate additional years of data into array along 'year' dim
+    # Concatenate additional years of data into 
+    # array along 'year' dim
     for file in files[1:]:
-        tmp = xr.open_dataarray(DATA_DIR.joinpath('har-data', file))
+        tmp = xr.open_dataarray(
+            DATA_DIR.joinpath('har-data', file))
         tmp = xr.DataArray(
             data=tmp[0:365,:,:].data, 
             coords={
-                'day': np.arange(0,365), 'south_north': tmp.south_north, 
-                'west_east': tmp.west_east, 'lat':tmp.lat, 'lon':tmp.lon}, 
-            dims=['day', 'south_north', 'west_east'], attrs=tmp.attrs)
+                'day': np.arange(0,365), 
+                'south_north': tmp.south_north, 
+                'west_east': tmp.west_east, 
+                'lat':tmp.lat, 'lon':tmp.lon}, 
+            dims=['day', 'south_north', 'west_east'], 
+            attrs=tmp.attrs)
         da = xr.concat([da, tmp], 'year')
 
     # Compute mean daily value across all years
@@ -69,7 +80,8 @@ for var in vars_2d:
     # Assign attributes
     da_clim.attrs = da.attrs
     da_clim.day.attrs = {
-        'long_name': 'day of (365-day) year', 'units': '24-hour day'}
+        'long_name': 'day of (365-day) year', 
+        'units': '24-hour day'}
 
     das.append(da_clim)
 
@@ -99,7 +111,7 @@ for i, season in enumerate(seasons):
     # Calculate mean seasonal air temperature
     da_T = ds['temp'].sel(day=season).mean(dim='day')
     da_T.attrs =  {
-        'long_name': 'Mean '+name_season[i]+' 2-m air temperature', 
+        'long_name': 'Mean '+name_season[i]+' 2-m air temperature',
         'units': ds['temp'].units}
     das_season.append(da_T)
 
@@ -151,10 +163,12 @@ for var in vars_static:
 
     # Subset files to those matching regex of current variable
     var_regex = r".+_" + "static_" + re.escape(var)
-    file = sorted([fn for fn in har_fn if re.search(var_regex, fn)])
+    file = sorted(
+        [fn for fn in har_fn if re.search(var_regex, fn)])
 
     # Import xarray
-    da = xr.open_dataarray(DATA_DIR.joinpath('har-data', file[0]))
+    da = xr.open_dataarray(
+        DATA_DIR.joinpath('har-data', file[0]))
 
     # Drop time dimension (bc data are static)
     da_static = da.mean(dim='time')
@@ -238,6 +252,14 @@ RGI.query(
 RGI.query(
     'Lon <= @ds_season.lon.max().values' 
     + '& Lon >= @ds_season.lon.min().values', 
+    inplace=True)
+
+# Remove 1% of glaciers that are smallest/largest in area
+# (eliminates tiny cluster of massive glaciers)
+a_min = np.quantile(RGI.area_m2, 0.001)
+a_max = np.quantile(RGI.area_m2, 0.995)
+RGI.query(
+    'area_m2 >= @a_min & area_m2 <= @a_max', 
     inplace=True)
 
 # Convert to gdf
@@ -372,7 +394,7 @@ pca_df = pd.DataFrame(
 
 
 
-ks = range(1,11)
+ks = range(2,16)
 scores = []
 
 for k in ks:
@@ -388,66 +410,79 @@ plt.show()
 # %% Initial k-clustering to determine groups for lapse rates
 
 # Cluster predictions
-grp_pred = KMeans(n_clusters=4).fit_predict(pca_df)
+k0 = 4
+grp_pred = KMeans(n_clusters=k0).fit_predict(pca_df)
 
 # Add cluster numbers to gdf
 clust_gdf = gdf_clim.copy()
 clust_gdf['cluster'] = grp_pred
 
-# Reassign clusters to consistent naming convention
-# (KMeans randomly assigned cluster value)
-clust_num = clust_gdf.cluster.values
-tmp = clust_gdf.groupby('cluster').mean()
-clust_alpha = np.repeat('NA', len(clust_num))
-clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
-clust_alpha[
-    clust_num == tmp['area_m2'].idxmax()] = 'B'
-clust_alpha[
-    clust_num == tmp['area_m2'].idxmin()] = 'D'
-clust_alpha[clust_alpha == 'NA'] = 'C'
+A_val = A_val = ord('A')
+alpha_dict = dict(
+    zip(np.arange(k0), 
+    [chr(char) for char in np.arange(A_val, A_val+k0)]))
+clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred]
+
+# # Reassign clusters to consistent naming convention
+# # (KMeans randomly assigned cluster value)
+# clust_num = clust_gdf.cluster.values
+# tmp = clust_gdf.groupby('cluster').mean()
+# clust_alpha = np.repeat('NA', len(clust_num))
+# clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
+# clust_alpha[
+#     clust_num == tmp['area_m2'].idxmax()] = 'B'
+# clust_alpha[
+#     clust_num == tmp['area_m2'].idxmin()] = 'D'
+# clust_alpha[clust_alpha == 'NA'] = 'C'
 clust_gdf['cluster'] = clust_alpha
 
 my_cmap = {
-    'A': '#e41a1c', 'B': '#377eb8', 'C': '#4daf4a', 'D': '#984ea3', 'E': '#ff7f00', 'F': '#ffff33'}
+    'A': '#e41a1c', 'B': '#377eb8', 'C': '#4daf4a', 
+    'D': '#984ea3', 'E': '#ff7f00', 'F': '#ffff33'}
 # my_cmap = {
 #     'A': '#66C2A5', 'B': '#FC8D62', 'C': '#8DA0CB', 'D': '#E78AC3'}
 cluster0_plt = gv.Points(
-    data=clust_gdf.sample(10000), vdims=['cluster']).opts(
-        color='cluster', colorbar=True, cmap=my_cmap, 
+    data=clust_gdf.sample(10000), 
+    vdims=['cluster']).opts(
+        color='cluster', colorbar=True, 
+        cmap='Category10', 
+        # cmap=my_cmap, 
+        legend_position='bottom_left', 
         size=5, tools=['hover'], width=750,
         height=500)
-cluster0_plt
+# cluster0_plt
 
 
 # %% Compare HAR elev to RGI elev to determine biases
 
-Z_res = gdf_clim.har_elev - gdf_clim.z_med
-# Z_res.plot(kind='density')
-print(Z_res.describe())
-gdf_Zres = gpd.GeoDataFrame(
-    data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
-    crs=gdf_clim.crs)
-elevRES_plt = gv.Points(
-    data=gdf_Zres.sample(15000), vdims=['Z_res']).opts(
-        color='Z_res', cmap='gwv_r', colorbar=True, 
-        size=5, tools=['hover'], width=750,
-        height=500).redim.range(Z_res=(-2000,2000))
-elevRES_plt
+# Z_res = gdf_clim.har_elev - gdf_clim.z_med
+# # Z_res.plot(kind='density')
+# print(Z_res.describe())
+# gdf_Zres = gpd.GeoDataFrame(
+#     data={'Z_res': Z_res}, geometry=gdf_clim.geometry, 
+#     crs=gdf_clim.crs)
+# elevRES_plt = gv.Points(
+#     data=gdf_Zres.sample(15000), vdims=['Z_res']).opts(
+#         color='Z_res', cmap='gwv_r', colorbar=True, 
+#         size=5, tools=['hover'], width=750,
+#         height=500).redim.range(Z_res=(-2000,2000))
+# elevRES_plt
 
 # %% Additional plot for per-cluster biases
 
-one_to_one = hv.Curve(
-    data=pd.DataFrame(
-        {'x':[0,7850], 'y':[0,7850]}))
-scatt_elev = hv.Points(
-    data=pd.DataFrame(clust_gdf), 
-    kdims=['z_med', 'har_elev'], 
-    vdims=['cluster']).groupby('cluster')
-(
-    one_to_one.opts(color='black') 
-    * scatt_elev.opts(
-        xlabel='RGI elevation (m)', 
-        ylabel='HAR elevation (m)'))
+# one_to_one = hv.Curve(
+#     data=pd.DataFrame(
+#         {'x':[0,7850], 'y':[0,7850]}))
+# scatt_elev = hv.Points(
+#     data=pd.DataFrame(clust_gdf), 
+#     kdims=['z_med', 'har_elev'], 
+#     vdims=['cluster']).groupby('cluster')
+# 
+# (
+#     one_to_one.opts(color='black') 
+#     * scatt_elev.opts(
+#         xlabel='RGI elevation (m)', 
+#         ylabel='HAR elevation (m)'))
 
 # %% Correct climate data based on per-cluster lapse rates
 
@@ -535,6 +570,71 @@ clust_correct['T_amp'] = (
 clust_correct.drop(
     ['har_elev', 'cluster'], axis=1, inplace=True)
 
+# %%
+
+# Convert seasonal precipitation to fraction of total
+clust_correct['prcp_DJF'] = clust_correct.apply(
+    lambda row: row.prcp_DJF/row.P_tot, axis=1)
+clust_correct['prcp_MAM'] = clust_correct.apply(
+    lambda row: row.prcp_MAM/row.P_tot, axis=1)
+clust_correct['prcp_JJA'] = clust_correct.apply(
+    lambda row: row.prcp_JJA/row.P_tot, axis=1)
+clust_correct['prcp_SON'] = clust_correct.apply(
+    lambda row: row.prcp_SON/row.P_tot, axis=1)
+
+
+clipping = {'min': 'red'}
+
+DJF_frac_plt = gv.Points(
+    data=clust_correct.sample(10000), 
+    vdims=['prcp_DJF']).opts(
+        color='prcp_DJF', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=600, height=500)
+
+MAM_frac_plt = gv.Points(
+    data=clust_correct.sample(10000), 
+    vdims=['prcp_MAM']).opts(
+        color='prcp_MAM', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=600, height=500)
+
+JJA_frac_plt = gv.Points(
+    data=clust_correct.sample(10000), 
+    vdims=['prcp_JJA']).opts(
+        color='prcp_JJA', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=600, height=500)
+
+SON_frac_plt = gv.Points(
+    data=clust_correct.sample(10000), 
+    vdims=['prcp_SON']).opts(
+        color='prcp_SON', colorbar=True, 
+        cmap='viridis', clipping_colors=clipping, 
+        size=5, tools=['hover'], width=600, height=500)
+
+P_max = np.quantile(clust_correct.P_tot, 0.99)
+P_min = np.quantile(clust_correct.P_tot, 0.01)
+Ptot_plt = gv.Points(
+    data=clust_correct.sample(10000), 
+    vdims=['P_tot']).opts(
+        color='P_tot', colorbar=True, 
+        cmap='viridis', size=5, tools=['hover'], 
+        width=600, height=500).redim.range(
+            P_tot=(P_min,P_max))
+
+# %%
+
+Ptot_plt + DJF_frac_plt.redim.range(prcp_DJF=(0,1))
+
+# %%
+
+(
+    MAM_frac_plt.redim.range(prcp_MAM=(0,1))
+    + JJA_frac_plt.redim.range(prcp_JJA=(0,1))
+    + SON_frac_plt.redim.range(prcp_SON=(0,1))
+)
+
 # %% PCA for dimensionality reduction of climate clusters
 
 # Normalize data variables
@@ -550,11 +650,15 @@ norm_df = (
     norm_df-norm_df.mean())/norm_df.std()
 
 # Select only climate variables for pca
+# pca_clim = norm_df[
+#     ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 
+#     'prcp_DJF', 'temp_MAM', 'prcp_MAM', 'temp_JJA', 
+#     'prcp_JJA', 'temp_SON', 'prcp_SON', 
+#     'z_med', 'Lon', 'Lat']]
 pca_clim = norm_df[
     ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 
     'prcp_DJF', 'temp_MAM', 'prcp_MAM', 'temp_JJA', 
-    'prcp_JJA', 'temp_SON', 'prcp_SON', 
-    'z_med', 'Lon', 'Lat']]
+    'prcp_JJA', 'temp_SON', 'prcp_SON']]
 
 # Perform PCA
 pca = PCA()
@@ -574,77 +678,112 @@ feat_corr = pd.DataFrame(
 
 # %%
 
-from sklearn.cluster import AgglomerativeClustering
-model = AgglomerativeClustering(
-    distance_threshold=0, n_clusters=None, linkage='ward')
+import time
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 
+data_samp = clust_correct.reset_index().sample(
+    frac=0.33, random_state=101)
 
-data_samp = clust_correct.reset_index().sample(frac=0.50, random_state=101)
-model = model.fit(pca_df.loc[data_samp.index,:])
-
-
-
-
-
+t0 = time.time()
+Z = linkage(pca_df.loc[data_samp.index,:], method='ward')
+t_end = time.time()
+print(f"Agglomerative clustering time: {t_end-t0:.0f}s")
 
 # %%
 
-ks = range(1,11)
-scores = []
-
-for k in ks:
-    model = KMeans(n_clusters=k)
-    model.fit_predict(pca_df)
-    scores.append(-model.score(pca_df))
-
-plt.plot(ks, scores)
-plt.ylabel('Total intra-cluster distance')
-plt.xlabel('k')
+plt.figure(figsize=(30, 12))
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('sample index')
+plt.ylabel('distance')
+dendrogram(
+    Z,
+    truncate_mode='level', p=6, 
+    # color_threshold=100, #k=10
+    # color_threshold=130, #k=8
+    color_threshold=150, #k=5
+    # color_threshold=200, #k=4
+    # color_threshold=250, #k=3
+    leaf_font_size=12., 
+    leaf_rotation=90.,  # rotates the x axis labels
+)
 plt.show()
 
 # %%
 
-# Cluster predictions based on PCs
-model = KMeans(n_clusters=4)
-grp_pred = model.fit_predict(pca_df)
-score = -model.score(pca_df)
+# Split results into desired clusters
+k = 4
+grp_pred = fcluster(Z, k, criterion='maxclust') - 1
+# max_d = 200
+# grp_pred = fcluster(Z, max_d, criterion='distance') - 1
 
 # Add cluster numbers to gdf
-clust_gdf = clust_correct.copy()
-clust_gdf['cluster'] = grp_pred
+clust_gdf = data_samp.copy()
+clust_gdf['clim_clust'] = grp_pred
 
 # Reassign clusters to consistent naming convention
-# (KMeans randomly assigned cluster value)
-clust_num = clust_gdf.cluster.values
-tmp = clust_gdf.groupby('cluster').mean()
-clust_alpha = np.repeat('NA', len(clust_num))
-clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
-clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
-clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'C'
-clust_alpha[clust_alpha == 'NA'] = 'D'
+A_val = A_val = ord('A')
+alpha_dict = dict(
+    zip(np.arange(k), 
+    [chr(char) for char in np.arange(A_val, A_val+k)]))
+clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred]
+# clust_num = clust_gdf.clim_clust.values
+# tmp = clust_gdf.groupby('clim_clust').mean()
+# clust_alpha = np.repeat('NA', len(clust_num))
 # clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
 # clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
 # clust_alpha[clust_num == tmp['area_m2'].idxmax()] = 'C'
 # clust_alpha[clust_num == tmp['area_m2'].idxmin()] = 'D'
 # clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'E'
 # clust_alpha[clust_alpha == 'NA'] = 'F'
-clust_gdf['cluster'] = clust_alpha
+clust_gdf['clim_clust'] = clust_alpha
 
 # Plot of clusters based on climate-only PCs
 clim_clust_plt = gv.Points(
-    data=clust_gdf.sample(10000), vdims=['cluster']).opts(
-        color='cluster', colorbar=True, cmap=my_cmap, 
-        size=5, tools=['hover'], width=750,
-        height=500)
+    data=clust_gdf.sample(10000), 
+    vdims=['clim_clust']).opts(
+        color='clim_clust', colorbar=True, 
+        cmap='Category10', size=5, tools=['hover'], 
+        legend_position='bottom_left', 
+        bgcolor='silver', width=600, height=500)
+
+# %%
+
+# # Cluster predictions based on PCs
+# model = KMeans(n_clusters=4)
+# grp_pred = model.fit_predict(pca_df)
+# score = -model.score(pca_df)
+
+# # Add cluster numbers to gdf
+# clust_gdf = clust_correct.copy()
+# clust_gdf['cluster'] = grp_pred
+
+# # Reassign clusters to consistent naming convention
+# # (KMeans randomly assigned cluster value)
+# clust_num = clust_gdf.cluster.values
+# tmp = clust_gdf.groupby('cluster').mean()
+# clust_alpha = np.repeat('NA', len(clust_num))
+# clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
+# clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
+# clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'C'
+# clust_alpha[clust_alpha == 'NA'] = 'D'
+# clust_gdf['cluster'] = clust_alpha
+
+# # Plot of clusters based on climate-only PCs
+# clim_clust_plt = gv.Points(
+#     data=clust_gdf.sample(10000), vdims=['cluster']).opts(
+#         color='cluster', colorbar=True, cmap=my_cmap, 
+#         size=5, tools=['hover'], width=750,
+#         height=500)
 
 # %% Generate PCs and clusters based on glacier data
 
+
+# pca_glacier = norm_df[
+#     ['z_med', 'z_max', 'z_min', 'z_slope', 
+#     'z_aspect', 'mb_mwea', 'area_m2', 'Lon', 'Lat']]
 pca_glacier = norm_df[
     ['z_med', 'z_max', 'z_min', 'z_slope', 
-    'z_aspect', 'mb_mwea', 'area_m2', 'Lon', 'Lat']]
-# pca_glacier = norm_df[
-#     ['z_med', 'z_min', 'z_max', 'z_slope', 'z_aspect', 
-#     'dhdt_ma', 'mb_mwea', 'area_m2', 'mb_m3wea', 'Lon', 'Lat']]
+    'z_aspect', 'mb_mwea', 'area_m2']]
 
 # Perform PCA
 pca2 = PCA()
@@ -657,71 +796,124 @@ pc_num2 = np.arange(
 pca_df2 = pd.DataFrame(
     pca2.fit_transform(pca_glacier)).iloc[:,0:pc_num2]
 
+# df of how features correlate with PCs
+feat_corr2 = pd.DataFrame(
+    pca2.components_.T, index=pca_glacier.columns)
+
 # %%
 
-ks = range(1,11)
-scores = []
+t0 = time.time()
+Z2 = linkage(pca_df2.loc[data_samp.index,:], method='ward')
+t_end = time.time()
+print(f"Agglomerative clustering time: {t_end-t0:.0f}s")
 
-for k in ks:
-    model = KMeans(n_clusters=k)
-    model.fit_predict(pca_df2)
-    scores.append(-model.score(pca_df2))
+# %%
 
-plt.plot(ks, scores)
-plt.ylabel('Total intra-cluster distance')
-plt.xlabel('k')
+plt.figure(figsize=(30, 12))
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('sample index')
+plt.ylabel('distance')
+dendrogram(
+    Z2,
+    truncate_mode='level', p=6, 
+    # color_threshold=90, #k=10
+    # color_threshold=135, #k=5
+    color_threshold=150, #k=4
+    leaf_font_size=12., 
+    leaf_rotation=90.,  # rotates the x axis labels
+)
 plt.show()
 
 # %%
 
-model2 = KMeans(n_clusters=4)
-grp_pred2 = model2.fit_predict(pca_df2)
-score2 = -model2.score(pca_df2)
+# Split results into desired clusters
+k2 = 4
+grp_pred2 = fcluster(Z2, k2, criterion='maxclust') - 1
 
 # Add cluster numbers to gdf
-clust_gdf2 = clust_correct.copy()
-clust_gdf2['cluster'] = grp_pred2
+clust_gdf['glac_clust'] = grp_pred2
+
 # Reassign clusters to consistent naming convention
-# (KMeans randomly assigned cluster value)
-clust_num = clust_gdf2.cluster.values
-tmp = clust_gdf2.groupby('cluster').mean()
-clust_alpha = np.repeat('NA', len(clust_num))
-clust_alpha[clust_num == tmp['mb_mwea'].idxmax()] = 'A'
-clust_alpha[clust_num == tmp['mb_mwea'].idxmin()] = 'C'
-clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'D'
-clust_alpha[clust_alpha == 'NA'] = 'B'
+alpha_dict = dict(
+    zip(np.arange(k2), 
+    [chr(char) for char in np.arange(A_val, A_val+k2)]))
+clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred2]
+# clust_num = clust_gdf.glac_clust.values
+# tmp = clust_gdf.groupby('glac_clust').mean()
+# clust_alpha = np.repeat('NA', len(clust_num))
 # clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
 # clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
 # clust_alpha[clust_num == tmp['area_m2'].idxmax()] = 'C'
 # clust_alpha[clust_num == tmp['area_m2'].idxmin()] = 'D'
-# clust_alpha[clust_num == tmp['dhdt_ma'].idxmin()] = 'E'
+# clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'E'
 # clust_alpha[clust_alpha == 'NA'] = 'F'
-clust_gdf2['cluster'] = clust_alpha
+clust_gdf['glac_clust'] = clust_alpha
 
+# Plot of clusters based on climate-only PCs
 glacier_clust_plt = gv.Points(
-    data=clust_gdf2.sample(10000), vdims=['cluster']).opts(
-        color='cluster', colorbar=True, cmap=my_cmap, 
-        size=5, tools=['hover'], width=750,
-        height=500)
+    data=clust_gdf.sample(10000), 
+    vdims=['glac_clust']).opts(
+        color='glac_clust', colorbar=True, cmap=my_cmap, 
+        size=5, tools=['hover'], legend_position='bottom_left', 
+        bgcolor='silver', width=600, height=500)
 
-(clim_clust_plt + glacier_clust_plt)
+mb_min = np.quantile(clust_gdf.mb_mwea, 0.01)
+mb_max = np.quantile(clust_gdf.mb_mwea, 0.99)
+mb_plt = gv.Points(
+    data=clust_gdf.sample(10000), vdims=['mb_mwea']).opts(
+        color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
+        symmetric=True, size=3, tools=['hover'], 
+        bgcolor='silver', width=600, height=500)
+
+(
+    clim_clust_plt + glacier_clust_plt 
+    + mb_plt.redim.range(mb_mwea=(mb_min,mb_max))
+)
+
+# %%
+
+# model2 = KMeans(n_clusters=4)
+# grp_pred2 = model2.fit_predict(pca_df2)
+# score2 = -model2.score(pca_df2)
+
+# # Add cluster numbers to gdf
+# clust_gdf2 = clust_correct.copy()
+# clust_gdf2['cluster'] = grp_pred2
+# # Reassign clusters to consistent naming convention
+# # (KMeans randomly assigned cluster value)
+# clust_num = clust_gdf2.cluster.values
+# tmp = clust_gdf2.groupby('cluster').mean()
+# clust_alpha = np.repeat('NA', len(clust_num))
+# clust_alpha[clust_num == tmp['mb_mwea'].idxmax()] = 'A'
+# clust_alpha[clust_num == tmp['mb_mwea'].idxmin()] = 'C'
+# clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'D'
+# clust_alpha[clust_alpha == 'NA'] = 'B'
+# clust_gdf2['cluster'] = clust_alpha
+
+# glacier_clust_plt = gv.Points(
+#     data=clust_gdf2.sample(10000), vdims=['cluster']).opts(
+#         color='cluster', colorbar=True, cmap=my_cmap, 
+#         size=5, tools=['hover'], width=750,
+#         height=500)
+
+# (clim_clust_plt + glacier_clust_plt)
 
 # %% Cluster statistics and exploration
 
 # Display cluster stats
-clust_groups = clust_gdf.groupby('cluster')
+clust_groups = clust_gdf.groupby('clim_clust')
 # print(clust_groups1.mean().drop(cols_drop, axis=1))
-clust_groups2 = clust_gdf2.groupby('cluster')
+clust_groups2 = clust_gdf.groupby('glac_clust')
 # print(clust_groups2.mean().drop(cols_drop, axis=1))
 
 clust_res = (
     pd.DataFrame(clust_groups2.median()) 
     - pd.DataFrame(clust_groups.median())
     ) / pd.DataFrame(clust_groups.median())
-print(clust_res)
+# print(clust_res)
 
 cnt_1 = clust_groups.count() / clust_gdf.shape[0]
-cnt_2 = clust_groups2.count() / clust_gdf2.shape[0]
+cnt_2 = clust_groups2.count() / clust_gdf.shape[0]
 grp_perc = pd.concat([cnt_1.iloc[:,1], cnt_2.iloc[:,1]], axis=1)
 grp_perc.columns = ['CLIM', 'GLACIER']
 print(grp_perc)
@@ -741,8 +933,8 @@ for var in plt_vars:
         label=key, color=my_cmap[key], 
         linestyle='--', legend=False)
     ax.set_xlim(
-        (np.min(clust_groups.min()[var]), 
-        np.max(clust_groups.max()[var])))
+        (np.quantile(clust_gdf[var], 0.005), 
+        np.quantile(clust_gdf[var], 0.995)))
     ax.set_xlabel(var)
     fig.set_size_inches((12,8))
     plt.show()
@@ -750,117 +942,49 @@ for var in plt_vars:
 # clust_groups['T_mu'].plot(kind='kde', legend=True)
 # clust_groups['P_tot'].plot(kind='kde', legend=True)
 
-
-# %%
-
-# Find fraction of P_tot for each season
-Pfrac_gdf = clust_gdf.copy()
-Pfrac_gdf['prcp_DJF'] = clust_gdf.apply(
-    lambda row: row.prcp_DJF/row.P_tot, axis=1)
-Pfrac_gdf['prcp_MAM'] = clust_gdf.apply(
-    lambda row: row.prcp_MAM/row.P_tot, axis=1)
-Pfrac_gdf['prcp_JJA'] = clust_gdf.apply(
-    lambda row: row.prcp_JJA/row.P_tot, axis=1)
-Pfrac_gdf['prcp_SON'] = clust_gdf.apply(
-    lambda row: row.prcp_SON/row.P_tot, axis=1)
-
-
-clipping = {'min': 'red'}
-
-DJF_frac_plt = gv.Points(
-    data=Pfrac_gdf.sample(10000), 
-    vdims=['prcp_DJF']).opts(
-        color='prcp_DJF', colorbar=True, 
-        cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=750, height=500)
-
-DJF_frac_plt.redim.range(prcp_DJF=(0,1))
-
-# %%
-MAM_frac_plt = gv.Points(
-    data=Pfrac_gdf.sample(10000), 
-    vdims=['prcp_MAM']).opts(
-        color='prcp_MAM', colorbar=True, 
-        cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=750, height=500)
-MAM_frac_plt.redim.range(prcp_MAM=(0,1))
-
-# %%
-JJA_frac_plt = gv.Points(
-    data=Pfrac_gdf.sample(10000), 
-    vdims=['prcp_JJA']).opts(
-        color='prcp_JJA', colorbar=True, 
-        cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=750, height=500)
-JJA_frac_plt.redim.range(prcp_JJA=(0,1))
-
-# %%
-SON_frac_plt = gv.Points(
-    data=Pfrac_gdf.sample(10000), 
-    vdims=['prcp_SON']).opts(
-        color='prcp_SON', colorbar=True, 
-        cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=750, height=500)
-SON_frac_plt.redim.range(prcp_SON=(0,1))
-
-# %%
-P_max = np.quantile(Pfrac_gdf.P_tot, 0.99)
-P_min = np.quantile(Pfrac_gdf.P_tot, 0.01)
-Ptot_plt = gv.Points(
-    data=Pfrac_gdf.sample(10000), 
-    vdims=['P_tot']).opts(
-        color='P_tot', colorbar=True, 
-        cmap='viridis', size=5, tools=['hover'], 
-        width=750, height=500).redim.range(
-            P_tot=(P_min,P_max))
-Ptot_plt
-
-
-
-
 # %% Clustering based on all numeric features
 
-# Perform PCA
-pca_ALL = PCA()
-pca_ALL.fit(norm_df)
+# # Perform PCA
+# pca_ALL = PCA()
+# pca_ALL.fit(norm_df)
 
-# Select results that cumulatively explain at least 95% of variance
-pc_var_ALL = pca_ALL.explained_variance_ratio_.cumsum()
-pc_num_ALL = np.arange(
-    len(pc_var_ALL))[pc_var_ALL >= 0.95][0] + 1
-pcaALL_df = pd.DataFrame(
-    pca_ALL.fit_transform(norm_df)).iloc[:,0:pc_num]
+# # Select results that cumulatively explain at least 95% of variance
+# pc_var_ALL = pca_ALL.explained_variance_ratio_.cumsum()
+# pc_num_ALL = np.arange(
+#     len(pc_var_ALL))[pc_var_ALL >= 0.95][0] + 1
+# pcaALL_df = pd.DataFrame(
+#     pca_ALL.fit_transform(norm_df)).iloc[:,0:pc_num]
 
-# df of how features correlate with PCs
-feat_corr = pd.DataFrame(
-    pca_ALL.components_.T, index=norm_df.columns)
+# # df of how features correlate with PCs
+# feat_corr = pd.DataFrame(
+#     pca_ALL.components_.T, index=norm_df.columns)
 
-# Cluster predictions based on PCs (best k could be 3,4,6, or 7)
-model = KMeans(n_clusters=4)
-grp_pred = model.fit_predict(pcaALL_df)
-score = -model.score(pcaALL_df)
+# # Cluster predictions based on PCs (best k could be 3,4,6, or 7)
+# model = KMeans(n_clusters=4)
+# grp_pred = model.fit_predict(pcaALL_df)
+# score = -model.score(pcaALL_df)
 
-# Add cluster numbers to gdf
-clust_gdf_ALL = clust_correct.copy()
-clust_gdf_ALL['cluster'] = grp_pred
+# # Add cluster numbers to gdf
+# clust_gdf_ALL = clust_correct.copy()
+# clust_gdf_ALL['cluster'] = grp_pred
 
-# Reassign clusters to consistent naming convention
-# (KMeans randomly assigned cluster value)
-clust_num = clust_gdf_ALL.cluster.values
-tmp = clust_gdf_ALL.groupby('cluster').mean()
-clust_alpha = np.repeat('NA', len(clust_num))
-clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
-clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
-clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'C'
-clust_alpha[clust_alpha == 'NA'] = 'D'
-clust_gdf_ALL['cluster'] = clust_alpha
+# # Reassign clusters to consistent naming convention
+# # (KMeans randomly assigned cluster value)
+# clust_num = clust_gdf_ALL.cluster.values
+# tmp = clust_gdf_ALL.groupby('cluster').mean()
+# clust_alpha = np.repeat('NA', len(clust_num))
+# clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
+# clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
+# clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'C'
+# clust_alpha[clust_alpha == 'NA'] = 'D'
+# clust_gdf_ALL['cluster'] = clust_alpha
 
-# Plot of clusters based on climate-only PCs
-clust_ALL_plt = gv.Points(
-    data=clust_gdf_ALL.sample(10000), vdims=['cluster']).opts(
-        color='cluster', colorbar=True, cmap=my_cmap, 
-        size=5, tools=['hover'], width=750,
-        height=500)
+# # Plot of clusters based on climate-only PCs
+# clust_ALL_plt = gv.Points(
+#     data=clust_gdf_ALL.sample(10000), vdims=['cluster']).opts(
+#         color='cluster', colorbar=True, cmap=my_cmap, 
+#         size=5, tools=['hover'], width=750,
+#         height=500)
 
 
 

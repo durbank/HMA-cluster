@@ -29,7 +29,7 @@ Recent satellite missions have provided more systemic measurements of HMA glacie
 An unexpected observation (confirmed through many other studies) is the near mass balance to slight positive mass balance in portions of the Karakoram, eastern Pamir, and western Kunlun Shan regions (Bolch et al., 2020).
 This has been attributed to increased winter precipitation dominated by westerlies and decreased summer temperature (due to ?).
 [Kunlun shan may be related to increased irrigation leading to higher summer snowfall; and the Pamir region may also be included in this?].
-At the same time, glaciers in other regions, especially the Western Himalaya, show large negative mass balances.
+At the same time, glaciers in other regions, especially the Eastern? Himalaya, show large negative mass balances.
 This has led to a general picture of glaciers towards the eastern and southern HMA characteristic precipitation dominated by summer monsoon storms, with western and northern regions of HMA characterized with precipitation dominated by winter storms influenced by the westerlies.
 Significant variability exists in this cartoon picture, however.
 
@@ -41,7 +41,7 @@ Here we characterize the attributes of similar glaciers and how these various at
 
 ## Outline
 
-### Introduction
+### Intro
 
 Dicsuss the motivation and importance of HMA
 

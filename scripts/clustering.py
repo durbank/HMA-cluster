@@ -423,18 +423,18 @@ pca_df = pd.DataFrame(
 
 
 
-ks = range(2,16)
-scores = []
+# ks = range(2,16)
+# scores = []
 
-for k in ks:
-    model = KMeans(n_clusters=k)
-    model.fit_predict(pca_df)
-    scores.append(-model.score(pca_df))
+# for k in ks:
+#     model = KMeans(n_clusters=k)
+#     model.fit_predict(pca_df)
+#     scores.append(-model.score(pca_df))
 
-plt.plot(ks, scores)
-plt.ylabel('Total intra-cluster distance')
-plt.xlabel('k')
-plt.show()
+# plt.plot(ks, scores)
+# plt.ylabel('Total intra-cluster distance')
+# plt.xlabel('k')
+# plt.show()
 
 # %% Initial k-clustering to determine groups for lapse rates
 
@@ -706,13 +706,28 @@ print(f"Random Forest regression R2: {RFR_score:.2f}")
 
 from sklearn.experimental import enable_hist_gradient_boosting
 from sklearn.ensemble import HistGradientBoostingRegressor as HGBR
+from sklearn.model_selection import cross_val_score
+
+# Need my own instance of splitter as I set seed elsewhere
+from sklearn.model_selection import KFold
+k_folder = KFold(
+    n_splits=5, shuffle=True)
 
 t0 = time.time()
-mod_HGBR = HGBR().fit(X, y)
-HGBR_score = mod_HGBR.score(X, y)
+mod_HGBR = HGBR()
+scores = cross_val_score(
+    mod_HGBR, X, y, cv=k_folder, n_jobs=-1)
 t_end = time.time()
-print(f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
-print(f"Histogram Gradient Boost regression score: {HGBR_score:.3f}")
+print(
+    f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
+print(f"K-fold R^2 scores: {scores}")
+
+
+# mod_HGBR = HGBR().fit(X, y)
+# HGBR_score = mod_HGBR.score(X, y)
+# t_end = time.time()
+# print(f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
+# print(f"Histogram Gradient Boost regression score: {HGBR_score:.3f}")
 
 # %% Experiments with Adaptive Boosting regression
 
@@ -1141,7 +1156,7 @@ omega_dict = dict(
     zip(np.arange(k_ALL), 
     [chr(char) for char in np.arange((A_val+26)-k_ALL, A_val+26)]))
 qnt_alpha = [
-    alpha_dict.get(item,item)  for item in mb_qnt]
+    omega_dict.get(item,item)  for item in mb_qnt]
 clust_gdf['mb_qnt'] = qnt_alpha
 
 cm_omega = [
@@ -1186,7 +1201,9 @@ for var in plt_vars:
     
     p_vals.append(p)
 
-stat, p = mannwhitneyu(
+print(p_vals)
+
+mannwhitneyu(
     clust_gdf.query('mb_qnt == "Y"')[plt_vars[-1]], 
     clust_gdf.query('mb_qnt == "Z"')[plt_vars[-1]], 
     alternative='two-sided')

@@ -13,7 +13,7 @@ import numpy as np
 from sklearn.neighbors import BallTree
 from sklearn.cluster import KMeans
 from sklearn import metrics
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import TheilSenRegressor
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import geoviews as gv
@@ -33,8 +33,8 @@ har_fn = [
         DATA_DIR.joinpath('har-data').glob('*.nc'))]
 
 # Assign 2D variables of interest (and names to use)
-vars_2d = ['t2', 'prcp']
-var_names = ['temp', 'prcp']
+vars_2d = ['t2', 'prcp', 'netrad']
+var_names = ['temp', 'prcp', 'netrad']
 
 # Format 2D data into mean daily value xr arrays
 das = []
@@ -115,6 +115,13 @@ for i, season in enumerate(seasons):
         'units': ds['temp'].units}
     das_season.append(da_T)
 
+    # Calculate mean seasonal net radiation
+    da_R = ds['netrad'].sel(day=season).mean(dim='day')
+    da_R.attrs =  {
+        'long_name': 'Mean '+name_season[i]+' net radiation',
+        'units': ds['netrad'].units}
+    das_season.append(da_R)
+
     # Calculate total seasonal precipitation
     da_P = ds['prcp'].sel(day=season).sum(dim='day')
     da_P.attrs = {
@@ -124,8 +131,10 @@ for i, season in enumerate(seasons):
 
 # Combine seasonal arrays to dataset
 var_seasons = [
-    'temp_DJF', 'prcp_DJF', 'temp_MAM', 'prcp_MAM', 
-    'temp_JJA', 'prcp_JJA', 'temp_SON', 'prcp_SON']
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM',  
+    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON']
 ds_season = xr.Dataset(dict(zip(var_seasons, das_season)))
 
 # Calculate mean in annual air temperature 
@@ -359,16 +368,29 @@ gdf_clim['T_amp'] = gdf_clim['temp_JJA'] -  gdf_clim['temp_DJF']
 # Remove glaciers with 0 annual prcp (bad modeling)
 gdf_clim.query('P_tot > 0', inplace=True)
 
+# %% Convert seasonal precip to fractional precipitation
+# Convert seasonal precipitation to fraction of total
+gdf_clim['prcp_DJF'] = gdf_clim.apply(
+    lambda row: row.prcp_DJF/row.P_tot, axis=1)
+gdf_clim['prcp_MAM'] = gdf_clim.apply(
+    lambda row: row.prcp_MAM/row.P_tot, axis=1)
+gdf_clim['prcp_JJA'] = gdf_clim.apply(
+    lambda row: row.prcp_JJA/row.P_tot, axis=1)
+gdf_clim['prcp_SON'] = gdf_clim.apply(
+    lambda row: row.prcp_SON/row.P_tot, axis=1)
+
 # %% Perform initial clustering to determine k
 
 # Normalize data variables
 norm_df = pd.DataFrame(gdf_clim[
     ['z_med', 'z_min', 'z_max', 'z_slope', 'HI', 
     'z_aspect', 'dhdt_ma', 'mb_mwea', 'area_m2', 
-    'mb_m3wea', 'temp_DJF', 'prcp_DJF', 'temp_MAM', 
-    'prcp_MAM', 'temp_JJA', 'prcp_JJA', 'temp_SON', 
-    'prcp_SON', 'T_mu', 'T_amp', 'P_tot', 
-    'har_elev']])
+    'mb_m3wea', 
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM', 
+    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON', 
+    'T_mu', 'T_amp', 'P_tot', 'har_elev']])
 # norm_df = pd.DataFrame(
 #     gdf_clim.drop(
 #         ['RGIId', 'geometry'], 
@@ -382,9 +404,11 @@ norm_df = (
 
 # Select climate features of interest
 clust_df = norm_df[
-    ['T_mu', 'P_tot', 'temp_DJF', 'prcp_DJF', 
-    'temp_MAM', 'prcp_MAM', 'temp_JJA', 'prcp_JJA', 
-    'temp_SON', 'prcp_SON', 'Lat', 'Lon', 'z_med']]
+    ['T_mu', 'P_tot', 'har_elev', 'Lat', 'Lon', 
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM', 
+    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON']]
 
 # Perform PCA
 pca = PCA()
@@ -399,18 +423,18 @@ pca_df = pd.DataFrame(
 
 
 
-ks = range(2,16)
-scores = []
+# ks = range(2,16)
+# scores = []
 
-for k in ks:
-    model = KMeans(n_clusters=k)
-    model.fit_predict(pca_df)
-    scores.append(-model.score(pca_df))
+# for k in ks:
+#     model = KMeans(n_clusters=k)
+#     model.fit_predict(pca_df)
+#     scores.append(-model.score(pca_df))
 
-plt.plot(ks, scores)
-plt.ylabel('Total intra-cluster distance')
-plt.xlabel('k')
-plt.show()
+# plt.plot(ks, scores)
+# plt.ylabel('Total intra-cluster distance')
+# plt.xlabel('k')
+# plt.show()
 
 # %% Initial k-clustering to determine groups for lapse rates
 
@@ -455,7 +479,7 @@ cluster0_plt = gv.Points(
         legend_position='bottom_left', 
         size=5, tools=['hover'], width=750,
         height=500)
-# cluster0_plt
+cluster0_plt
 
 
 # %% Compare HAR elev to RGI elev to determine biases
@@ -501,7 +525,7 @@ def correct_lapse(
     # Find best fit temperature lapse rate
     X = geodf[x_name].to_numpy()
     y = geodf[y_name].to_numpy()
-    reg = LinearRegression().fit(X.reshape(-1,1), y)
+    reg = TheilSenRegressor().fit(X.reshape(-1,1), y)
     
     # Define variable lapse rate
     lapse_rate = reg.coef_[0]
@@ -549,8 +573,7 @@ def correct_lapse(
 
 
 vars_correct = [
-    'T_mu', 'temp_DJF', 'temp_MAM', 
-    'temp_JJA', 'temp_SON']
+    'T_mu', 'temp_DJF', 'temp_MAM', 'temp_JJA', 'temp_SON']
 # vars_correct = [
 #     'T_mu', 'P_tot', 'temp_DJF', 'temp_MAM', 
 #     'temp_JJA', 'temp_SON', 'prcp_DJF', 'prcp_MAM', 
@@ -577,68 +600,79 @@ clust_correct.drop(
 
 # %%
 
-# Convert seasonal precipitation to fraction of total
-clust_correct['prcp_DJF'] = clust_correct.apply(
-    lambda row: row.prcp_DJF/row.P_tot, axis=1)
-clust_correct['prcp_MAM'] = clust_correct.apply(
-    lambda row: row.prcp_MAM/row.P_tot, axis=1)
-clust_correct['prcp_JJA'] = clust_correct.apply(
-    lambda row: row.prcp_JJA/row.P_tot, axis=1)
-clust_correct['prcp_SON'] = clust_correct.apply(
-    lambda row: row.prcp_SON/row.P_tot, axis=1)
+# # Convert seasonal precipitation to fraction of total
+# clust_correct['prcp_DJF'] = clust_correct.apply(
+#     lambda row: row.prcp_DJF/row.P_tot, axis=1)
+# clust_correct['prcp_MAM'] = clust_correct.apply(
+#     lambda row: row.prcp_MAM/row.P_tot, axis=1)
+# clust_correct['prcp_JJA'] = clust_correct.apply(
+#     lambda row: row.prcp_JJA/row.P_tot, axis=1)
+# clust_correct['prcp_SON'] = clust_correct.apply(
+#     lambda row: row.prcp_SON/row.P_tot, axis=1)
 
 
-clipping = {'min': 'red'}
+clipping = {'min': 'red', 'max': 'orange'}
 
 DJF_frac_plt = gv.Points(
     data=clust_correct.sample(10000), 
     vdims=['prcp_DJF']).opts(
         color='prcp_DJF', colorbar=True, 
         cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=600, height=500)
+        size=5, tools=['hover'], bgcolor='silver', 
+        width=600, height=500).redim.range(prcp_DJF=(0,1))
 
 MAM_frac_plt = gv.Points(
     data=clust_correct.sample(10000), 
     vdims=['prcp_MAM']).opts(
         color='prcp_MAM', colorbar=True, 
         cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=600, height=500)
+        size=5, tools=['hover'], bgcolor='silver', 
+        width=600, height=500).redim.range(prcp_MAM=(0,1))
 
 JJA_frac_plt = gv.Points(
     data=clust_correct.sample(10000), 
     vdims=['prcp_JJA']).opts(
         color='prcp_JJA', colorbar=True, 
         cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=600, height=500)
+        size=5, tools=['hover'], bgcolor='silver', 
+        width=600, height=500).redim.range(prcp_JJA=(0,1))
 
 SON_frac_plt = gv.Points(
     data=clust_correct.sample(10000), 
     vdims=['prcp_SON']).opts(
         color='prcp_SON', colorbar=True, 
         cmap='viridis', clipping_colors=clipping, 
-        size=5, tools=['hover'], width=600, height=500)
+        size=5, tools=['hover'], bgcolor='silver', 
+        width=600, height=500).redim.range(prcp_SON=(0,1))
 
 P_max = np.quantile(clust_correct.P_tot, 0.99)
 P_min = np.quantile(clust_correct.P_tot, 0.01)
 Ptot_plt = gv.Points(
     data=clust_correct.sample(10000), 
     vdims=['P_tot']).opts(
-        color='P_tot', colorbar=True, 
+        color='P_tot', colorbar=True, bgcolor='silver', 
         cmap='viridis', size=5, tools=['hover'], 
         width=600, height=500).redim.range(
-            P_tot=(P_min,P_max))
+            P_tot=(0,P_max))
+
+# Mass balance map
+mb_min = np.quantile(clust_gdf.mb_mwea, 0.01)
+mb_max = np.quantile(clust_gdf.mb_mwea, 0.99)
+mb_plt = gv.Points(
+    data=clust_gdf.sample(10000), vdims=['mb_mwea']).opts(
+        color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
+        symmetric=True, size=3, tools=['hover'], 
+        bgcolor='silver', 
+        width=600, height=500).redim.range(
+            mb_mwea=(mb_min,mb_max))
 
 # %%
 
-Ptot_plt + DJF_frac_plt.redim.range(prcp_DJF=(0,1))
+(mb_plt + Ptot_plt + DJF_frac_plt)
 
 # %%
 
-(
-    MAM_frac_plt.redim.range(prcp_MAM=(0,1))
-    + JJA_frac_plt.redim.range(prcp_JJA=(0,1))
-    + SON_frac_plt.redim.range(prcp_SON=(0,1))
-)
+(MAM_frac_plt + JJA_frac_plt + SON_frac_plt)
 
 # %% Random forest regression
 
@@ -648,9 +682,11 @@ from sklearn.ensemble import RandomForestRegressor as RFR
 X = clust_correct[
     ['z_med', 'HI', 'z_slope', 'z_aspect', 'area_m2', 
     # 'perc_debris', 'perc_clean', 
-    'temp_DJF', 'prcp_DJF', 'temp_MAM', 
-    'prcp_MAM', 'temp_JJA', 'prcp_JJA', 'temp_SON', 
-    'prcp_SON', 'T_mu', 'T_amp', 'P_tot']]
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM', 
+    'temp_JJA', 'prcp_JJA', 'rad_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON', 
+    'T_mu', 'T_amp', 'P_tot']]
 X['Lon'] = clust_correct.geometry.x
 X['Lat'] = clust_correct.geometry.y
 y = clust_correct['mb_mwea']
@@ -665,15 +701,33 @@ RFR_score = regr.score(X,y)
 print(f"Random Forest regression R2: {RFR_score:.2f}")
 
 # %% Experiments with Histogram-based Gradient boosting
-# This is similar to Gradient Boosting, but much faster for
-# large n (n>10000)
+# This is similar to Gradient Boosting, but much faster 
+# for large n (n>10000)
 
 from sklearn.experimental import enable_hist_gradient_boosting
 from sklearn.ensemble import HistGradientBoostingRegressor as HGBR
+from sklearn.model_selection import cross_val_score
 
-mod_HGBR = HGBR().fit(X, y)
-HGBR_score = mod_HGBR.score(X, y)
-print(f"Histogram Gradient Boost regression score: {HGBR_score:.3f}")
+# Need my own instance of splitter as I set seed elsewhere
+from sklearn.model_selection import KFold
+k_folder = KFold(
+    n_splits=5, shuffle=True)
+
+t0 = time.time()
+mod_HGBR = HGBR()
+scores = cross_val_score(
+    mod_HGBR, X, y, cv=k_folder, n_jobs=-1)
+t_end = time.time()
+print(
+    f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
+print(f"K-fold R^2 scores: {scores}")
+
+
+# mod_HGBR = HGBR().fit(X, y)
+# HGBR_score = mod_HGBR.score(X, y)
+# t_end = time.time()
+# print(f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
+# print(f"Histogram Gradient Boost regression score: {HGBR_score:.3f}")
 
 # %% Experiments with Adaptive Boosting regression
 
@@ -692,11 +746,14 @@ print(f"Histogram Gradient Boost regression score: {HGBR_score:.3f}")
 
 # Normalize data variables
 norm_df = pd.DataFrame(clust_correct[
-    ['z_med', 'HI', 'z_min', 'z_max', 'z_slope', 
-    'z_aspect', 'dhdt_ma', 'mb_mwea', 'area_m2', 
-    'mb_m3wea', 'temp_DJF', 'prcp_DJF', 'temp_MAM', 
-    'prcp_MAM', 'temp_JJA', 'prcp_JJA', 'temp_SON', 
-    'prcp_SON', 'T_mu', 'T_amp', 'P_tot']])
+    ['z_med', 'HI', 'z_min', 'z_max', 
+    'z_slope', 'z_aspect', 'dhdt_ma', 
+    'mb_mwea', 'area_m2', 'mb_m3wea', 
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM', 
+    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON', 
+    'T_mu', 'T_amp', 'P_tot']])
 norm_df['Lon'] = clust_correct.geometry.x
 norm_df['Lat'] = clust_correct.geometry.y
 norm_df = (
@@ -709,9 +766,11 @@ norm_df = (
 #     'prcp_JJA', 'temp_SON', 'prcp_SON', 
 #     'z_med', 'Lon', 'Lat']]
 pca_clim = norm_df[
-    ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 
-    'prcp_DJF', 'temp_MAM', 'prcp_MAM', 'temp_JJA', 
-    'prcp_JJA', 'temp_SON', 'prcp_SON']]
+    ['T_mu', 'T_amp', 'P_tot', 
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM', 
+    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON']]
 
 # Perform PCA
 pca = PCA()
@@ -750,11 +809,8 @@ plt.ylabel('distance')
 dendrogram(
     Z,
     truncate_mode='level', p=6, 
-    # color_threshold=100, #k=10
-    # color_threshold=130, #k=8
-    color_threshold=150, #k=5
-    # color_threshold=200, #k=4
-    # color_threshold=250, #k=3
+    color_threshold=225, #k=4
+    # color_threshold=150, #k=7
     leaf_font_size=12., 
     leaf_rotation=90.,  # rotates the x axis labels
 )
@@ -763,7 +819,7 @@ plt.show()
 # %%
 
 # Split results into desired clusters
-k = 4
+k = 5
 grp_pred = fcluster(Z, k, criterion='maxclust') - 1
 # max_d = 200
 # grp_pred = fcluster(Z, max_d, criterion='distance') - 1
@@ -866,9 +922,9 @@ plt.ylabel('distance')
 dendrogram(
     Z2,
     truncate_mode='level', p=6, 
-    # color_threshold=90, #k=10
-    # color_threshold=135, #k=5
-    color_threshold=150, #k=4
+    color_threshold=175, #k=4
+    # color_threshold=150, #k=5
+    # color_threshold=125, #k=6
     leaf_font_size=12., 
     leaf_rotation=90.,  # rotates the x axis labels
 )
@@ -907,18 +963,18 @@ glacier_clust_plt = gv.Points(
         size=5, tools=['hover'], legend_position='bottom_left', 
         bgcolor='silver', width=600, height=500)
 
-mb_min = np.quantile(clust_gdf.mb_mwea, 0.01)
-mb_max = np.quantile(clust_gdf.mb_mwea, 0.99)
-mb_plt = gv.Points(
-    data=clust_gdf.sample(10000), vdims=['mb_mwea']).opts(
-        color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
-        symmetric=True, size=3, tools=['hover'], 
-        bgcolor='silver', width=600, height=500)
+# mb_min = np.quantile(clust_gdf.mb_mwea, 0.01)
+# mb_max = np.quantile(clust_gdf.mb_mwea, 0.99)
+# mb_plt = gv.Points(
+#     data=clust_gdf.sample(10000), vdims=['mb_mwea']).opts(
+#         color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
+#         symmetric=True, size=3, tools=['hover'], 
+#         bgcolor='silver', 
+#         width=600, height=500).redim.range(
+#             mb_mwea=(mb_min,mb_max)
 
-(
-    clim_clust_plt + glacier_clust_plt 
-    + mb_plt.redim.range(mb_mwea=(mb_min,mb_max))
-)
+(clim_clust_plt + glacier_clust_plt + mb_plt)
+
 
 # %%
 
@@ -969,7 +1025,7 @@ def var_plts(gdf_data, grouping_var, var_list, my_cmap):
 
 # %%
 plt_vars = [
-    'z_med', 'HI', 'mb_mwea', 'z_slope', 'z_aspect', 
+    'mb_mwea', 'z_med', 'HI', 'z_slope', 'z_aspect', 
     'area_m2', 'T_mu', 'T_amp', 'P_tot', 
     'prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']
 
@@ -979,10 +1035,13 @@ var_plts(clust_gdf, 'glac_clust', plt_vars, cat_cmap)
 # %% PCA with all combined features
 
 feat_ALL = norm_df[
-    ['z_med', 'HI', 'z_min', 'z_max', 'z_slope', 
-    'z_aspect', 'area_m2', 'T_mu', 'T_amp', 'P_tot', 
-    'temp_DJF', 'prcp_DJF', 'temp_MAM', 'prcp_MAM', 
-    'temp_JJA', 'prcp_JJA', 'temp_SON', 'prcp_SON']]
+    ['z_med', 'HI', 'z_min', 'z_max', 
+    'z_slope', 'z_aspect', 'area_m2', 
+    'T_mu', 'T_amp', 'P_tot', 
+    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
+    'temp_MAM', 'rad_MAM', 'prcp_MAM', 
+    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
+    'temp_SON', 'rad_SON', 'prcp_SON']]
 
 # Perform PCA
 pca_ALL = PCA()
@@ -1016,9 +1075,10 @@ plt.ylabel('distance')
 dendrogram(
     Z_ALL,
     truncate_mode='level', p=6, 
-    # color_threshold=200, #k=5
-    # color_threshold=150, #k=7
-    color_threshold=120, #k=8
+    # color_threshold=300, #k=3
+    color_threshold=265, #k=4
+    # color_threshold=200, #k=6
+    # color_threshold=150, #k=8
     leaf_font_size=12., 
     leaf_rotation=90.,  # rotates the x axis labels
 )
@@ -1056,12 +1116,11 @@ mb_plt = gv.Points(
     data=clust_gdf.sample(10000), vdims=['mb_mwea']).opts(
         color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
         symmetric=True, size=3, tools=['hover'], 
-        bgcolor='silver', width=600, height=500)
+        bgcolor='silver', 
+        width=600, height=500).redim.range(
+            mb_mwea=(mb_min,mb_max))
 
-(
-    clustALL_plt
-    + mb_plt.redim.range(mb_mwea=(mb_min,mb_max))
-)
+(clustALL_plt + mb_plt)
 
 # %% Cluster statistics and exploration
 
@@ -1085,6 +1144,71 @@ print(clustALL_groups.mean()[glac_feat])
 clustALL_groups.mean()[clim_feat]
 
 var_plts(clust_gdf, 'ALL_clust', plt_vars, cat_cmap)
+
+# %%
+# Divide data by mb quantiles and see how the various groups
+# compare to one another
+
+mb_qnt = pd.qcut(
+    clust_gdf['mb_mwea'], k_ALL, labels=False)
+
+omega_dict = dict(
+    zip(np.arange(k_ALL), 
+    [chr(char) for char in np.arange((A_val+26)-k_ALL, A_val+26)]))
+qnt_alpha = [
+    omega_dict.get(item,item)  for item in mb_qnt]
+clust_gdf['mb_qnt'] = qnt_alpha
+
+cm_omega = [
+    chr(el) for el in np.arange((A_val+26)-len(cm_tab10), (A_val+26))]
+qnt_cmap = dict(zip(cm_omega, cm_tab10))
+
+
+gdf_qnt = clust_gdf.groupby('mb_qnt')
+print(gdf_qnt.median()[glac_feat])
+print(gdf_qnt.std()[glac_feat])
+print(gdf_qnt.median()[clim_feat])
+print(gdf_qnt.std()[clim_feat])
+
+var_plts(clust_gdf, 'mb_qnt', plt_vars, qnt_cmap)
+
+# %%
+
+# Plot of clusters based all feature PCAs
+mbQNT_plt = gv.Points(
+    data=clust_gdf.sample(10000), 
+    vdims=['mb_qnt']).opts(
+        color='mb_qnt', cmap='Category10', size=3, 
+        tools=['hover'], legend_position='bottom_left', 
+        bgcolor='silver', width=600, height=500)
+
+(mbQNT_plt + mb_plt + clustALL_plt)
+
+# %%
+
+from scipy.stats import mannwhitneyu, kruskal
+
+p_vals = []
+
+for var in plt_vars:
+
+    stat, p = kruskal(
+        clust_gdf.query('mb_qnt == "V"')[var], 
+        clust_gdf.query('mb_qnt == "W"')[var], 
+        clust_gdf.query('mb_qnt == "X"')[var], 
+        clust_gdf.query('mb_qnt == "Y"')[var], 
+        clust_gdf.query('mb_qnt == "Z"')[var])
+    
+    p_vals.append(p)
+
+print(p_vals)
+
+mannwhitneyu(
+    clust_gdf.query('mb_qnt == "Y"')[plt_vars[-1]], 
+    clust_gdf.query('mb_qnt == "Z"')[plt_vars[-1]], 
+    alternative='two-sided')
+
+
 
 # %%
 # import matplotlib.cm as cm

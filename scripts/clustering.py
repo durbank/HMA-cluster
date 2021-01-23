@@ -678,6 +678,12 @@ mb_plt = gv.Points(
 
 import time
 from sklearn.ensemble import RandomForestRegressor as RFR
+from sklearn.model_selection import cross_val_score
+
+# Need my own instance of splitter as I set seed elsewhere
+from sklearn.model_selection import KFold
+k_folder = KFold(
+    n_splits=5, shuffle=True)
 
 X = clust_correct[
     ['z_med', 'HI', 'z_slope', 'z_aspect', 'area_m2', 
@@ -692,13 +698,13 @@ X['Lat'] = clust_correct.geometry.y
 y = clust_correct['mb_mwea']
 
 t0 = time.time()
-regr = RFR(max_depth=2, random_state=0, n_jobs=-1)
-regr.fit(X, y)
+mod_RFR = RFR(max_depth=2)
+RFR_scores = cross_val_score(
+    mod_RFR, X, y, cv=k_folder, n_jobs=-1)
 t_end = time.time()
-print(f"Random Forest regression time: {t_end-t0:.0f}s")
 
-RFR_score = regr.score(X,y)
-print(f"Random Forest regression R2: {RFR_score:.2f}")
+print(f"Random Forest regression time: {t_end-t0:.0f}s")
+print(f"K-fold R^2 scores for RF regression: {RFR_scores}")
 
 # %% Experiments with Histogram-based Gradient boosting
 # This is similar to Gradient Boosting, but much faster 
@@ -706,41 +712,61 @@ print(f"Random Forest regression R2: {RFR_score:.2f}")
 
 from sklearn.experimental import enable_hist_gradient_boosting
 from sklearn.ensemble import HistGradientBoostingRegressor as HGBR
-from sklearn.model_selection import cross_val_score
-
-# Need my own instance of splitter as I set seed elsewhere
-from sklearn.model_selection import KFold
-k_folder = KFold(
-    n_splits=5, shuffle=True)
 
 t0 = time.time()
 mod_HGBR = HGBR()
-scores = cross_val_score(
+HGB_scores = cross_val_score(
     mod_HGBR, X, y, cv=k_folder, n_jobs=-1)
 t_end = time.time()
+
 print(
     f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
-print(f"K-fold R^2 scores: {scores}")
+print(f"K-fold R^2 scores for HGB regression: {HGB_scores}")
 
+# %% Ridge regression
 
-# mod_HGBR = HGBR().fit(X, y)
-# HGBR_score = mod_HGBR.score(X, y)
+from sklearn.linear_model import Ridge
+
+t0 = time.time()
+mod_ridge = Ridge()
+ridge_scores = cross_val_score(
+    mod_ridge, X, y, cv=k_folder, n_jobs=-1)
+t_end = time.time()
+
+print(f"Ridge regression time: {t_end-t0:.0f}s")
+print(f"K-fold R^2 scores for Ridge regression: {ridge_scores}")
+
+# %% Support vector machine regression
+
+from sklearn import svm
+
+# SVM is scale-dependent, so need to normalize data
+X_norm = (X-X.mean()) / X.std()
+y_norm = (y-y.mean()) / y.std()
+
+# # Estimate optimal hyperparameter C
+# Cs = np.linspace(0.01, 1, 10)
+# C_scores = []
+# t0 = time.time()
+# for C in Cs:
+#     model = svm.LinearSVR(C=C).fit(X_norm, y_norm)
+#     C_scores.append(model.score(X_norm, y_norm))
 # t_end = time.time()
-# print(f"Histogram Gradient Boost regression time: {t_end-t0:.0f}s")
-# print(f"Histogram Gradient Boost regression score: {HGBR_score:.3f}")
+# plt.plot(Cs, C_scores)
+# plt.ylabel('SVR score')
+# plt.xlabel('C')
+# plt.show()
+# print(f"SVM regression time: {t_end-t0:.0f}s")
+# Changing C has virtually no effect...keeping C=1
 
-# %% Experiments with Adaptive Boosting regression
+t0 = time.time()
+mod_svm = svm.LinearSVR() #RBF is likely better, but dataset too large
+svm_scores = cross_val_score(
+    mod_svm, X_norm, y_norm, cv=k_folder, n_jobs=-1)
+t_end = time.time()
 
-# from sklearn.tree import DecisionTreeRegressor
-# from sklearn.ensemble import AdaBoostRegressor as ABR
-
-# mod_ABR = ABR(
-#     DecisionTreeRegressor(max_depth=4),
-#     n_estimators=300)
-# mod_ABR = mod_ABR.fit(X,y)
-# ABR_score = mod_ABR.score(X,y)
-# print(f"AdaBoost regression score: {ABR_score:.3f}")
-# # Almost no predictive power!
+print(f"SVM regression time: {t_end-t0:.0f}s")
+print(f"K-fold R^2 scores for SVM regression: {svm_scores}")
 
 # %% PCA for dimensionality reduction of climate clusters
 
@@ -760,11 +786,6 @@ norm_df = (
     norm_df-norm_df.mean())/norm_df.std()
 
 # Select only climate variables for pca
-# pca_clim = norm_df[
-#     ['T_mu', 'T_amp', 'P_tot', 'temp_DJF', 
-#     'prcp_DJF', 'temp_MAM', 'prcp_MAM', 'temp_JJA', 
-#     'prcp_JJA', 'temp_SON', 'prcp_SON', 
-#     'z_med', 'Lon', 'Lat']]
 pca_clim = norm_df[
     ['T_mu', 'T_amp', 'P_tot', 
     'temp_DJF', 'rad_DJF', 'prcp_DJF', 
@@ -854,42 +875,11 @@ clim_clust_plt = gv.Points(
         legend_position='bottom_left', 
         bgcolor='silver', width=600, height=500)
 
-# %%
-
-# # Cluster predictions based on PCs
-# model = KMeans(n_clusters=4)
-# grp_pred = model.fit_predict(pca_df)
-# score = -model.score(pca_df)
-
-# # Add cluster numbers to gdf
-# clust_gdf = clust_correct.copy()
-# clust_gdf['cluster'] = grp_pred
-
-# # Reassign clusters to consistent naming convention
-# # (KMeans randomly assigned cluster value)
-# clust_num = clust_gdf.cluster.values
-# tmp = clust_gdf.groupby('cluster').mean()
-# clust_alpha = np.repeat('NA', len(clust_num))
-# clust_alpha[clust_num == tmp['z_med'].idxmax()] = 'A'
-# clust_alpha[clust_num == tmp['z_med'].idxmin()] = 'B'
-# clust_alpha[clust_num == tmp['P_tot'].idxmax()] = 'C'
-# clust_alpha[clust_alpha == 'NA'] = 'D'
-# clust_gdf['cluster'] = clust_alpha
-
-# # Plot of clusters based on climate-only PCs
-# clim_clust_plt = gv.Points(
-#     data=clust_gdf.sample(10000), vdims=['cluster']).opts(
-#         color='cluster', colorbar=True, cmap=my_cmap, 
-#         size=5, tools=['hover'], width=750,
-#         height=500)
-
 # %% Generate PCs and clusters based on glacier data
 
 pca_glacier = norm_df[
     ['z_med', 'HI', 'z_max', 'z_min', 
     'z_slope', 'z_aspect', 'area_m2']]
-    # pca_glacier = norm_df[
-    # ['z_med', 'HI', 'z_max', 'z_min', 'z_slope', 'z_aspect']]
 
 # Perform PCA
 pca2 = PCA()
@@ -963,18 +953,7 @@ glacier_clust_plt = gv.Points(
         size=5, tools=['hover'], legend_position='bottom_left', 
         bgcolor='silver', width=600, height=500)
 
-# mb_min = np.quantile(clust_gdf.mb_mwea, 0.01)
-# mb_max = np.quantile(clust_gdf.mb_mwea, 0.99)
-# mb_plt = gv.Points(
-#     data=clust_gdf.sample(10000), vdims=['mb_mwea']).opts(
-#         color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
-#         symmetric=True, size=3, tools=['hover'], 
-#         bgcolor='silver', 
-#         width=600, height=500).redim.range(
-#             mb_mwea=(mb_min,mb_max)
-
 (clim_clust_plt + glacier_clust_plt + mb_plt)
-
 
 # %%
 
@@ -1208,32 +1187,6 @@ mannwhitneyu(
     clust_gdf.query('mb_qnt == "Z"')[plt_vars[-1]], 
     alternative='two-sided')
 
-
-
-# %%
-# import matplotlib.cm as cm
-# cm_tab10 = cm.get_cmap('tab10').colors
-# cm_alpha = [
-#     chr(el) for el in np.arange(A_val, A_val+len(cm_tab10))]
-# cat_cmap = dict(zip(cm_alpha, cm_tab10))
-
-
-# plt_vars = [
-#     'z_med', 'HI', 'mb_mwea', 'z_slope', 'z_aspect', 
-#     'area_m2', 'T_mu', 'T_amp', 'P_tot', 
-#     'prcp_DJF', 'prcp_MAM', 'prcp_JJA', 'prcp_SON']
-# for var in plt_vars:
-#     fig, ax = plt.subplots()
-#     for key, group in clustALL_groups:
-#         group[var].plot(ax=ax, kind='kde', 
-#             label=key, color=cat_cmap[key], 
-#             legend=True)
-#     ax.set_xlim(
-#         (np.quantile(clust_gdf[var], 0.005), 
-#         np.quantile(clust_gdf[var], 0.995)))
-#     ax.set_xlabel(var)
-#     fig.set_size_inches((12,8))
-#     plt.show()
 
 
 # %%

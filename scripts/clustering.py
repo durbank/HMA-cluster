@@ -697,14 +697,14 @@ X['Lon'] = clust_correct.geometry.x
 X['Lat'] = clust_correct.geometry.y
 y = clust_correct['mb_mwea']
 
-t0 = time.time()
-mod_RFR = RFR(max_depth=2)
-RFR_scores = cross_val_score(
-    mod_RFR, X, y, cv=k_folder, n_jobs=-1)
-t_end = time.time()
+# t0 = time.time()
+# mod_RFR = RFR(min_samples_split=0.01)
+# RFR_scores = cross_val_score(
+#     mod_RFR, X, y, cv=k_folder, n_jobs=-1)
+# t_end = time.time()
 
-print(f"Random Forest regression time: {t_end-t0:.0f}s")
-print(f"K-fold R^2 scores for RF regression: {RFR_scores}")
+# print(f"Random Forest regression time: {t_end-t0:.0f}s")
+# print(f"K-fold R^2 scores for RF regression: {RFR_scores}")
 
 # %% Experiments with Histogram-based Gradient boosting
 # This is similar to Gradient Boosting, but much faster 

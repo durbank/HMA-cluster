@@ -1,4 +1,15 @@
-# Script to perform clustering of climate variables for HMA
+# %%[markdown]
+# # EDA clustering for HMA glacio-climate zones
+# 
+# This research uses HAR daily 10-km gridded climate data (averaged over the period 2004-2018).
+# Variables included in the analysis are temperature, precipitation, and insolation.
+# Temperature and insolation data are aggregated to annual and seasonal (DJF/MAM/JJA/SON) averages and precipitation is summed to annual totals and seasonal fractions of total precipitation.
+# Glacier data are taken from the RGI 6 database.
+# Attributes used in the analysis are min/median/max elevation, hypsometric index, slope, aspect, and area (in the future will also include debris cover and land/lake terminating).
+# 
+# HAR climate temperatures are corrected for errors in HAR elevation (based on difference between median glacier elevation and reported HAR elevation).
+# This divides glacier data into 5 ~equal-size clusters (based on PCA components using location, HAR elevation, and HAR climate features) and calculates per-season and annual temperature lapse rates to use in correcting HAR climate data (I also investigated precip lapse rates, but solutions were far from straightforward).
+# I then apply various regression and clustering algorithms to investigate relationships.
 
 # %% Set environment
 
@@ -481,7 +492,11 @@ cluster0_plt = gv.Points(
         height=500)
 cluster0_plt
 
-
+# %%[markdown]
+#
+# Map showing the locations of different clusters used for temperature lapse rate calculations.
+# (Note that due to the nature of the clustering algorithms, color labeling is currently not consistent throughout these figures).
+#  
 # %% Compare HAR elev to RGI elev to determine biases
 
 # Z_res = gdf_clim.har_elev - gdf_clim.z_med
@@ -666,14 +681,38 @@ mb_plt = gv.Points(
         width=600, height=500).redim.range(
             mb_mwea=(mb_min,mb_max))
 
+# Temperature maps
+Tmu_plt = gv.Points(
+        data=clust_correct.sample(10000), 
+        vdims=['T_mu']).opts(
+            color='T_mu', colorbar=True, 
+            cmap='bmy', clipping_colors=clipping, 
+            size=5, tools=['hover'], bgcolor='silver', 
+            width=600, height=500) 
+Tamp_plt = gv.Points(
+        data=clust_correct.sample(10000), 
+        vdims=['T_amp']).opts(
+            color='T_amp', colorbar=True, 
+            cmap='YlOrRd', clipping_colors=clipping, 
+            size=5, tools=['hover'], bgcolor='silver', 
+            width=600, height=500)
+
 # %%
 
-(mb_plt + Ptot_plt + DJF_frac_plt)
+(Ptot_plt + Tmu_plt + Tamp_plt)
 
+# %%[markdown]
+# Maps showing (from left to right) the total precipitation (mm/a), mean annual temperature (K), and amplitude in seasonal temperature (K).
+#  
 # %%
 
-(MAM_frac_plt + JJA_frac_plt + SON_frac_plt)
+(
+    DJF_frac_plt + MAM_frac_plt 
+    + JJA_frac_plt + SON_frac_plt).cols(2)
 
+# %%[markdown]
+# Maps showing fraction of precipitation falling in each season (topleft:DJF, topright:MAM, bottleft:JJA, bottright:SON)
+# 
 # %% Random forest regression
 
 import time
@@ -697,16 +736,16 @@ X['Lon'] = clust_correct.geometry.x
 X['Lat'] = clust_correct.geometry.y
 y = clust_correct['mb_mwea']
 
-# t0 = time.time()
-# mod_RFR = RFR(min_samples_split=0.01)
-# RFR_scores = cross_val_score(
-#     mod_RFR, X, y, cv=k_folder, n_jobs=-1)
-# t_end = time.time()
+t0 = time.time()
+mod_RFR = RFR(min_samples_split=0.01)
+RFR_scores = cross_val_score(
+    mod_RFR, X, y, cv=k_folder, n_jobs=-1)
+t_end = time.time()
 
-# print(f"Random Forest regression time: {t_end-t0:.0f}s")
-# print(f"K-fold R^2 scores for RF regression: {RFR_scores}")
+print(f"Random Forest regression time: {t_end-t0:.0f}s")
+print(f"K-fold R^2 scores for RF regression: {RFR_scores}")
 
-# %% Experiments with Histogram-based Gradient boosting
+# %% Histogram-based Gradient boosting
 # This is similar to Gradient Boosting, but much faster 
 # for large n (n>10000)
  # Additional information can be found [here](https://www.datasciencecentral.com/profiles/blogs/decision-tree-vs-random-forest-vs-boosted-trees-explained), [here](https://machinelearningmastery.com/histogram-based-gradient-boosting-ensembles/), [here](https://robotenique.github.io/posts/gbm-histogram/), and in the [HGBR scikit docs](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html)
@@ -831,6 +870,7 @@ plt.ylabel('distance')
 dendrogram(
     Z,
     truncate_mode='level', p=6, 
+    # color_threshold=280, #k=3
     color_threshold=225, #k=4
     # color_threshold=150, #k=7
     leaf_font_size=12., 
@@ -841,7 +881,7 @@ plt.show()
 # %%
 
 # Split results into desired clusters
-k = 5
+k = 4
 grp_pred = fcluster(Z, k, criterion='maxclust') - 1
 # max_d = 200
 # grp_pred = fcluster(Z, max_d, criterion='distance') - 1
@@ -913,6 +953,7 @@ plt.ylabel('distance')
 dendrogram(
     Z2,
     truncate_mode='level', p=6, 
+    # color_threshold=200, #k=3
     color_threshold=175, #k=4
     # color_threshold=150, #k=5
     # color_threshold=125, #k=6
@@ -921,6 +962,10 @@ dendrogram(
 )
 plt.show()
 
+# %%[markdown]
+# Dendrograms showing the agglomerative clustering based on just climate features (top) and just glacier features (bottom).
+# Coloring for both is for splits corresponding to 4 total clusters.
+#  
 # %%
 
 # Split results into desired clusters
@@ -956,6 +1001,10 @@ glacier_clust_plt = gv.Points(
 
 (clim_clust_plt + glacier_clust_plt + mb_plt)
 
+# %%[markdown]
+# Maps of the locations of climate clusters, glacier clusters, and the distribution in mass balance values.
+# Note again that currently color schemes will not be consistent through all plots!
+#  
 # %%
 
 clustCLIM_groups = clust_gdf.groupby('clim_clust')
@@ -966,6 +1015,10 @@ cnt_GLAC = clustGLAC_groups.count() / clust_gdf.shape[0]
 print(cnt_CLIM['RGIId'])
 print(cnt_GLAC['RGIId'])
 
+# %%[markdown]
+# Fraction of total in each cluster for climate and glacier clusters.
+# Note that one of the clusters for the glacier attributes contain a substantially different number of samples.
+#  
 # %%
 
 import matplotlib.cm as cm
@@ -1055,7 +1108,7 @@ plt.ylabel('distance')
 dendrogram(
     Z_ALL,
     truncate_mode='level', p=6, 
-    # color_threshold=300, #k=3
+    # color_threshold=350, #k=3
     color_threshold=250, #k=4
     # color_threshold=200, #k=6
     # color_threshold=150, #k=8
@@ -1064,10 +1117,13 @@ dendrogram(
 )
 plt.show()
 
+# %%[markdown]
+# Dendrogram for agglomerative clustering using both glacier and climate features.
+#  
 # %%
 
 # Split results into desired clusters
-k_ALL = 5
+k_ALL = 4
 grp_pred_ALL = fcluster(
     Z_ALL, k_ALL, criterion='maxclust') - 1
 
@@ -1102,6 +1158,9 @@ mb_plt = gv.Points(
 
 (clustALL_plt + mb_plt)
 
+# %%[markdown]
+# Map of the locations of combined glacio-climate clusters and the distribution in mass balance values.
+#  
 # %% Cluster statistics and exploration
 
 glac_feat = [
@@ -1125,6 +1184,9 @@ clustALL_groups.mean()[clim_feat]
 
 var_plts(clust_gdf, 'ALL_clust', plt_vars, cat_cmap)
 
+# %%[markdown]
+# Distributions in various glacio-climate attributes for the different clusters members.
+# 
 # %%
 # Divide data by mb quantiles and see how the various groups
 # compare to one another
@@ -1154,7 +1216,7 @@ var_plts(clust_gdf, 'mb_qnt', plt_vars, qnt_cmap)
 
 # %%
 
-# Plot of clusters based all feature PCAs
+# Map of mb_divisions
 mbQNT_plt = gv.Points(
     data=clust_gdf.sample(10000), 
     vdims=['mb_qnt']).opts(

@@ -709,6 +709,7 @@ y = clust_correct['mb_mwea']
 # %% Experiments with Histogram-based Gradient boosting
 # This is similar to Gradient Boosting, but much faster 
 # for large n (n>10000)
+ # Additional information can be found [here](https://www.datasciencecentral.com/profiles/blogs/decision-tree-vs-random-forest-vs-boosted-trees-explained), [here](https://machinelearningmastery.com/histogram-based-gradient-boosting-ensembles/), [here](https://robotenique.github.io/posts/gbm-histogram/), and in the [HGBR scikit docs](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html)
 
 from sklearn.experimental import enable_hist_gradient_boosting
 from sklearn.ensemble import HistGradientBoostingRegressor as HGBR
@@ -1055,7 +1056,7 @@ dendrogram(
     Z_ALL,
     truncate_mode='level', p=6, 
     # color_threshold=300, #k=3
-    color_threshold=265, #k=4
+    color_threshold=250, #k=4
     # color_threshold=200, #k=6
     # color_threshold=150, #k=8
     leaf_font_size=12., 

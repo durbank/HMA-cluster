@@ -60,7 +60,7 @@ Different proposed zonations of HMA include:
 - Treichler et al. (2019) attempted an automated clustering technique that failed (they think due to the high number of features)
 - Bolch et al. (2019) divided HMA into 22 sub-regions (based on existing regional deliniations, and topographical and climatological characteristics of different mountain ranges)
 
-Summarize my contributiona and how it fits in with/fill gaps in prior work
+Summarize my contributions and how it fits in with/fill gaps in prior work
 
 - Blah
 - Blah

@@ -4,6 +4,7 @@
 
 # Import modules
 import re
+import time
 from pathlib import Path
 import pandas as pd
 import pyproj
@@ -14,6 +15,7 @@ from sklearn.neighbors import BallTree
 from sklearn.cluster import KMeans
 from sklearn.linear_model import TheilSenRegressor
 from sklearn.decomposition import PCA
+from scipy.cluster.hierarchy import dendrogram, linkage, fcluster
 import matplotlib.pyplot as plt
 import geoviews as gv
 gv.extension('bokeh')
@@ -32,8 +34,8 @@ har_fn = [
         DATA_DIR.joinpath('har-data').glob('*.nc'))]
 
 # Assign 2D variables of interest (and names to use)
-vars_2d = ['t2', 'prcp', 'netrad']
-var_names = ['temp', 'prcp', 'netrad']
+vars_2d = ['t2', 'prcp']
+var_names = ['temp', 'prcp']
 
 # Format 2D data into mean daily value xr arrays
 das = []
@@ -97,15 +99,16 @@ ds['prcp'].attrs = {
 
 # Define season indices
 DJF = np.concatenate((np.arange(335,365), np.arange(0,60)))
-MAM = np.arange(60,152)
+# MAM = np.arange(60,152)
 JJA = np.arange(152,244)
-SON = np.arange(244,335)
+# SON = np.arange(244,335)
+WARM = np.arange(91,273)
 
 # Create xr-arrays for single-valued variables 
 # (temp amplitude, seasonal means/totals, etc.)
 das_season = []
-seasons = [DJF, MAM, JJA, SON]
-name_season = ['winter', 'spring', 'summer', 'autumn']
+seasons = [DJF, JJA, WARM]
+name_season = ['winter', 'summer', 'warm']
 for i, season in enumerate(seasons):
     # Calculate mean seasonal air temperature
     da_T = ds['temp'].sel(day=season).mean(dim='day')
@@ -113,13 +116,6 @@ for i, season in enumerate(seasons):
         'long_name': 'Mean '+name_season[i]+' 2-m air temperature',
         'units': ds['temp'].units}
     das_season.append(da_T)
-
-    # Calculate mean seasonal net radiation
-    da_R = ds['netrad'].sel(day=season).mean(dim='day')
-    da_R.attrs =  {
-        'long_name': 'Mean '+name_season[i]+' net radiation',
-        'units': ds['netrad'].units}
-    das_season.append(da_R)
 
     # Calculate total seasonal precipitation
     da_P = ds['prcp'].sel(day=season).sum(dim='day')
@@ -130,10 +126,8 @@ for i, season in enumerate(seasons):
 
 # Combine seasonal arrays to dataset
 var_seasons = [
-    'temp_DJF', 'rad_DJF', 'prcp_DJF', 
-    'temp_MAM', 'rad_MAM', 'prcp_MAM',  
-    'temp_JJA', 'rad_JJA', 'prcp_JJA', 
-    'temp_SON', 'rad_SON', 'prcp_SON']
+    'temp_DJF', 'prcp_DJF', 'temp_JJA', 'prcp_JJA', 
+    'temp_WARM', 'prcp_WARM']
 ds_season = xr.Dataset(dict(zip(var_seasons, das_season)))
 
 # Calculate mean in annual air temperature 
@@ -143,14 +137,14 @@ T_mu.attrs = {
     'units': ds['temp'].units}
 ds_season['T_mu'] = T_mu
 
-# Calculate seasonal amplitude in daily air temperature 
-# (and add to seasonal dataset)
-# NOTE: This needs to be refined to not simply use max/min
-T_amp = ds['temp'].max(dim='day') - ds['temp'].min(dim='day')
-T_amp.attrs = {
-    'long_name': 'Amplitude in annual 2-m air temperature', 
-    'units': ds['temp'].units}
-ds_season['T_amp'] = T_amp
+# # Calculate seasonal amplitude in daily air temperature 
+# # (and add to seasonal dataset)
+# # NOTE: This needs to be refined to not simply use max/min
+# T_amp = ds['temp'].max(dim='day') - ds['temp'].min(dim='day')
+# T_amp.attrs = {
+#     'long_name': 'Amplitude in annual 2-m air temperature', 
+#     'units': ds['temp'].units}
+# ds_season['T_amp'] = T_amp
 
 # Calculate total annual precipitation and add to seasonal dataset
 P_tot = ds['prcp'].sum(dim='day')
@@ -239,14 +233,6 @@ RGI.query(
     'Lon <= @ds_season.lon.max().values' 
     + '& Lon >= @ds_season.lon.min().values', 
     inplace=True)
-
-# # Remove 1% of glaciers that are smallest/largest in area
-# # (eliminates tiny cluster of massive glaciers)
-# a_min = np.quantile(RGI.area_m2, 0.001)
-# a_max = np.quantile(RGI.area_m2, 0.995)
-# RGI.query(
-#     'area_m2 >= @a_min & area_m2 <= @a_max', 
-#     inplace=True)
 
 # Calculate hypsometric indices of glaciers
 HI = (RGI['z_max']-RGI['z_med']) / (RGI['z_med']-RGI['z_min'])
@@ -342,59 +328,54 @@ gdf_clim = extract_at_pts(ds_season, RGI_gdf)
 # issue of single bad values biasing values)
 gdf_clim['T_amp'] = gdf_clim['temp_JJA'] -  gdf_clim['temp_DJF']
 
-# Remove glaciers with 0 annual prcp (bad modeling)
-gdf_clim.query('P_tot > 0', inplace=True)
-
 # %% Convert seasonal precip to fractional precipitation
 # Convert seasonal precipitation to fraction of total
 gdf_clim['prcp_DJF'] = gdf_clim.apply(
     lambda row: row.prcp_DJF/row.P_tot, axis=1)
-gdf_clim['prcp_MAM'] = gdf_clim.apply(
-    lambda row: row.prcp_MAM/row.P_tot, axis=1)
 gdf_clim['prcp_JJA'] = gdf_clim.apply(
     lambda row: row.prcp_JJA/row.P_tot, axis=1)
-gdf_clim['prcp_SON'] = gdf_clim.apply(
-    lambda row: row.prcp_SON/row.P_tot, axis=1)
+gdf_clim['fracP_WARM'] = gdf_clim.apply(
+    lambda row: row.prcp_WARM/row.P_tot, axis=1)
 
 # %%
 
-gdf_plt = gdf_clim.sample(10000)
-clipping = {'min': 'red', 'max': 'orange'}
+# gdf_plt = gdf_clim.sample(10000)
+# clipping = {'min': 'red', 'max': 'orange'}
 
-# Mass balance map
-mb_min = np.quantile(gdf_clim.mb_mwea, 0.01)
-mb_max = np.quantile(gdf_clim.mb_mwea, 0.99)
-mb_plt = gv.Points(
-    data=gdf_plt, vdims=['mb_mwea']).opts(
-        color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
-        symmetric=True, size=3, tools=['hover'], 
-        bgcolor='silver', 
-        width=600, height=500).redim.range(
-            mb_mwea=(mb_min,mb_max))
+# # Mass balance map
+# mb_min = np.quantile(gdf_clim.mb_mwea, 0.01)
+# mb_max = np.quantile(gdf_clim.mb_mwea, 0.99)
+# mb_plt = gv.Points(
+#     data=gdf_plt, vdims=['mb_mwea']).opts(
+#         color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
+#         symmetric=True, size=3, tools=['hover'], 
+#         bgcolor='silver', 
+#         width=600, height=500).redim.range(
+#             mb_mwea=(mb_min,mb_max))
 
-# Temperature maps
-Tmu_min = np.quantile(gdf_clim.T_mu, 0.01)
-Tmu_max = np.quantile(gdf_clim.T_mu, 0.99)
-Tmu_plt = gv.Points(
-        data=gdf_plt, 
-        vdims=['T_mu']).opts(
-            color='T_mu', colorbar=True, 
-            cmap='bmy', clipping_colors=clipping, 
-            size=5, tools=['hover'], bgcolor='silver', 
-            width=600, height=500).redim.range(
-                T_mu=(Tmu_min, Tmu_max))
+# # Temperature maps
+# Tmu_min = np.quantile(gdf_clim.T_mu, 0.01)
+# Tmu_max = np.quantile(gdf_clim.T_mu, 0.99)
+# Tmu_plt = gv.Points(
+#         data=gdf_plt, 
+#         vdims=['T_mu']).opts(
+#             color='T_mu', colorbar=True, 
+#             cmap='bmy', clipping_colors=clipping, 
+#             size=5, tools=['hover'], bgcolor='silver', 
+#             width=600, height=500).redim.range(
+#                 T_mu=(Tmu_min, Tmu_max))
 
-# Temperature difference map
-Tamp_min = np.quantile(gdf_clim.T_amp, 0.01)
-Tamp_max = np.quantile(gdf_clim.T_amp, 0.99)
-Tamp_plt = gv.Points(
-        data=gdf_plt, 
-        vdims=['T_amp']).opts(
-            color='T_amp', colorbar=True, 
-            cmap='fire', clipping_colors=clipping, 
-            size=5, tools=['hover'], bgcolor='silver', 
-            width=600, height=500).redim.range(
-                T_amp=(Tamp_min, Tamp_max))
+# # Temperature difference map
+# Tamp_min = np.quantile(gdf_clim.T_amp, 0.01)
+# Tamp_max = np.quantile(gdf_clim.T_amp, 0.99)
+# Tamp_plt = gv.Points(
+#         data=gdf_plt, 
+#         vdims=['T_amp']).opts(
+#             color='T_amp', colorbar=True, 
+#             cmap='fire', clipping_colors=clipping, 
+#             size=5, tools=['hover'], bgcolor='silver', 
+#             width=600, height=500).redim.range(
+#                 T_amp=(Tamp_min, Tamp_max))
 
 # # Elevation plot
 # zmed_min = np.quantile(gdf_clim.z_med, 0.01)
@@ -408,38 +389,60 @@ Tamp_plt = gv.Points(
 #             width=600, height=500).redim.range(
 #                 z_med=(zmed_min, zmed_max))
 
-# Total precip plot
-P_max = np.quantile(gdf_clim.P_tot, 0.99)
-P_min = np.quantile(gdf_clim.P_tot, 0.01)
-Ptot_plt = gv.Points(
-    data=gdf_plt, 
-    vdims=['P_tot']).opts(
-        color='P_tot', colorbar=True, bgcolor='silver', 
-        cmap='viridis', size=5, tools=['hover'], 
-        width=600, height=500).redim.range(
-            P_tot=(0,P_max))
+# # Total precip plot
+# P_max = np.quantile(gdf_clim.P_tot, 0.99)
+# P_min = np.quantile(gdf_clim.P_tot, 0.01)
+# Ptot_plt = gv.Points(
+#     data=gdf_plt, 
+#     vdims=['P_tot']).opts(
+#         color='P_tot', colorbar=True, bgcolor='silver', 
+#         cmap='viridis', size=5, tools=['hover'], 
+#         width=600, height=500).redim.range(
+#             P_tot=(0,P_max))
 
-# Winter precip plot
-DJFprcp_plt = gv.Points(
-    data=gdf_plt, 
-    vdims=['prcp_DJF']).opts(
-        color='prcp_DJF', colorbar=True, 
-        cmap='plasma', clipping_colors=clipping, 
-        size=5, tools=['hover'], bgcolor='silver', 
-        width=600, height=500).redim.range(prcp_DJF=(0,1))
+# # Winter precip plot
+# DJFprcp_plt = gv.Points(
+#     data=gdf_plt, 
+#     vdims=['prcp_DJF']).opts(
+#         color='prcp_DJF', colorbar=True, 
+#         cmap='plasma', clipping_colors=clipping, 
+#         size=5, tools=['hover'], bgcolor='silver', 
+#         width=600, height=500).redim.range(prcp_DJF=(0,1))
 
-# Summer precip plot
-JJAprcp_plt = gv.Points(
-    data=gdf_plt, 
-    vdims=['prcp_JJA']).opts(
-        color='prcp_JJA', colorbar=True, 
-        cmap='plasma', clipping_colors=clipping, 
-        size=5, tools=['hover'], bgcolor='silver', 
-        width=600, height=500).redim.range(prcp_JJA=(0,1))
+# # Summer precip plot
+# JJAprcp_plt = gv.Points(
+#     data=gdf_plt, 
+#     vdims=['prcp_JJA']).opts(
+#         color='prcp_JJA', colorbar=True, 
+#         cmap='plasma', clipping_colors=clipping, 
+#         size=5, tools=['hover'], bgcolor='silver', 
+#         width=600, height=500).redim.range(prcp_JJA=(0,1))
 
-(
-    mb_plt  + Tmu_plt + Tamp_plt
-    + Ptot_plt + DJFprcp_plt + JJAprcp_plt).cols(3)
+
+# # Temperature maps
+# warmT_min = np.quantile(gdf_clim.T_mu, 0.01)
+# warmT_max = np.quantile(gdf_clim.T_mu, 0.99)
+# warmT_plt = gv.Points(
+#         data=gdf_plt, 
+#         vdims=['temp_WARM']).opts(
+#             color='temp_WARM', colorbar=True, 
+#             cmap='bmy', clipping_colors=clipping, 
+#             size=5, tools=['hover'], bgcolor='silver', 
+#             width=600, height=500).redim.range(
+#                 T_mu=(warmT_min, warmT_max))
+
+# # Fractional warm P plot
+# warmPf_plt = gv.Points(
+#     data=gdf_plt, 
+#     vdims=['fracP_WARM']).opts(
+#         color='fracP_WARM', colorbar=True, 
+#         cmap='plasma', clipping_colors=clipping, 
+#         size=5, tools=['hover'], bgcolor='silver', 
+#         width=600, height=500).redim.range(fracP_WARM=(0,1))
+
+# (
+#     mb_plt  + warmT_plt + Tamp_plt + 
+#     Zmed_plt + Ptot_plt + warmPf_plt).cols(3)
 
 # %%
 
@@ -449,8 +452,8 @@ gdf_clim['area_km2'] = gdf_clim['area_m2'] / 1000**2
 gdf_glacier = gdf_clim.loc[:,
     ['RGIId', 'mb_mwea', 'geometry', 'area_km2', 
     'z_med', 'har_elev', 'z_slope', 'z_aspect', 
-    'HI', 'T_mu', 'T_amp', 'temp_DJF', 'temp_JJA', 
-    'P_tot', 'prcp_JJA']]
+    'HI', 'T_mu', 'T_amp', 'temp_JJA', 'temp_WARM', 
+    'P_tot', 'prcp_JJA', 'prcp_WARM', 'fracP_WARM']]
 
 # %% Correct climate data based on per-cluster lapse rates
 
@@ -514,12 +517,12 @@ def correct_lapse(
 
 # %% Initial k-clustering to determine groups for lapse rates
 
-# Select climate features of interest for clustering
-clust_df = pd.DataFrame(gdf_glacier[
-    ['har_elev', 'T_mu', 'T_amp', 'temp_DJF', 
-    'temp_JJA', 'P_tot', 'prcp_JJA']])
-clust_df['Lon'] = gdf_glacier.geometry.x
-clust_df['Lat'] = gdf_glacier.geometry.y
+# # Select climate features of interest for clustering
+# clust_df = pd.DataFrame(gdf_glacier[
+#     ['har_elev', 'T_mu', 'T_amp', 'temp_DJF', 
+#     'temp_JJA', 'P_tot', 'prcp_JJA']])
+# clust_df['Lon'] = gdf_glacier.geometry.x
+# clust_df['Lat'] = gdf_glacier.geometry.y
 
 
 # # Perform PCA
@@ -533,38 +536,38 @@ clust_df['Lat'] = gdf_glacier.geometry.y
 # pca_df = pd.DataFrame(
 #     pca.fit_transform(clust_df)).iloc[:,0:pc_num]
 
-# Cluster predictions
-k0 = 4
-grp_pred = KMeans(n_clusters=k0).fit_predict(clust_df)
+# # Cluster predictions
+# k0 = 4
+# grp_pred = KMeans(n_clusters=k0).fit_predict(clust_df)
 
-# Add cluster numbers to gdf
-clust_gdf = gdf_glacier.copy()
-clust_gdf['cluster'] = grp_pred
+# # Add cluster numbers to gdf
+# clust_gdf = gdf_glacier.copy()
+# clust_gdf['cluster'] = grp_pred
 
-# Reassign clusters to consistent naming convention
-# (KMeans randomly assigned cluster value)
-A_val = A_val = ord('A')
-alpha_dict = dict(
-    zip(np.arange(k0), 
-    [chr(char) for char in np.arange(A_val, A_val+k0)]))
-clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred]
+# # Reassign clusters to consistent naming convention
+# # (KMeans randomly assigned cluster value)
+# A_val = A_val = ord('A')
+# alpha_dict = dict(
+#     zip(np.arange(k0), 
+#     [chr(char) for char in np.arange(A_val, A_val+k0)]))
+# clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred]
 
-# Add cluster groups to gdf
-clust_gdf['cluster'] = clust_alpha
+# # Add cluster groups to gdf
+# clust_gdf['cluster'] = clust_alpha
 
-my_cmap = {
-    'A': '#e41a1c', 'B': '#377eb8', 'C': '#4daf4a', 
-    'D': '#984ea3', 'E': '#ff7f00', 'F': '#ffff33'}
-cluster0_plt = gv.Points(
-    data=clust_gdf.sample(10000), 
-    vdims=['cluster']).opts(
-        color='cluster', colorbar=True, 
-        cmap='Category10', 
-        # cmap=my_cmap, 
-        legend_position='bottom_left', 
-        size=5, tools=['hover'], width=750,
-        height=500)
-cluster0_plt
+# my_cmap = {
+#     'A': '#e41a1c', 'B': '#377eb8', 'C': '#4daf4a', 
+#     'D': '#984ea3', 'E': '#ff7f00', 'F': '#ffff33'}
+# cluster0_plt = gv.Points(
+#     data=clust_gdf.sample(10000), 
+#     vdims=['cluster']).opts(
+#         color='cluster', colorbar=True, 
+#         cmap='Category10', 
+#         # cmap=my_cmap, 
+#         legend_position='bottom_left', 
+#         size=5, tools=['hover'], width=750,
+#         height=500)
+# cluster0_plt
 
 # %%
 
@@ -580,67 +583,68 @@ cluster0_plt
 
 # %%
 
-groups = clust_gdf.groupby('cluster')
+# groups = clust_gdf.groupby('cluster')
 
-fig, ax = plt.subplots()
-for name, group in groups:
-    ax.plot(group.har_elev, group.T_mu, marker='o', linestyle='', ms=4, label=name, alpha=0.05)
-ax.legend()
-ax.set_xlabel('Har elevation')
-ax.set_ylabel('Mean annual T')
+# fig, ax = plt.subplots()
+# for name, group in groups:
+#     ax.plot(group.har_elev, group.T_mu, marker='o', linestyle='', ms=4, label=name, alpha=0.05)
+# ax.legend()
+# ax.set_xlabel('Har elevation')
+# ax.set_ylabel('Mean annual T')
 
-fig, ax = plt.subplots()
-for name, group in groups:
-    ax.plot(group.har_elev, group.temp_DJF, marker='o', linestyle='', ms=4, label=name, alpha=0.05)
-ax.legend()
-ax.set_xlabel('Har elevation')
-ax.set_ylabel('Mean winter T')
+# fig, ax = plt.subplots()
+# for name, group in groups:
+#     ax.plot(group.har_elev, group.temp_DJF, marker='o', linestyle='', ms=4, label=name, alpha=0.05)
+# ax.legend()
+# ax.set_xlabel('Har elevation')
+# ax.set_ylabel('Mean winter T')
 
-fig, ax = plt.subplots()
-for name, group in groups:
-    ax.plot(group.har_elev, group.temp_JJA, marker='o', linestyle='', ms=4, label=name, alpha=0.05)
-ax.legend()
-ax.set_xlabel('Har elevation')
-ax.set_ylabel('Mean summer T')
+# fig, ax = plt.subplots()
+# for name, group in groups:
+#     ax.plot(group.har_elev, group.temp_JJA, marker='o', linestyle='', ms=4, label=name, alpha=0.05)
+# ax.legend()
+# ax.set_xlabel('Har elevation')
+# ax.set_ylabel('Mean summer T')
 
 # %%
 
-# Determine if seasonal lapse rates differ from annual
-vars_correct = ['T_mu', 'temp_JJA', 'temp_DJF']
-clust_correct = gdf_glacier.copy()
-for var in vars_correct:
-    clust_correct = correct_lapse(
-            clust_correct, x_name='har_elev', y_name=var, 
-            xTrue_name='z_med', show_plts=True)
+# # Determine if seasonal lapse rates differ from annual
+# vars_correct = ['T_mu', 'temp_JJA', 'temp_DJF']
+# clust_correct = gdf_glacier.copy()
+# for var in vars_correct:
+#     clust_correct = correct_lapse(
+#             clust_correct, x_name='har_elev', y_name=var, 
+#             xTrue_name='z_med', show_plts=True)
 
 # %%[markdown]
 # Based on these analyses, the cluster groups have minimal impact on determining temperature lapse rates.
 # Slightly more important would be seasonal temperature lapse rates, but these are also fairly minor.
-# For the time being, I will therefore simply use the mean annual temperature in modeling, and that is the only variable needing correction.
+# For the time being, I will therefore simply use the mean annual temperature and the "warm season" mean temperature in modeling, and these are the only elevation corrections needed.
 # 
 # %%
 
-# Select variables of interest in modeling
-gdf_glacier = gdf_clim.loc[:,
-    ['RGIId', 'mb_mwea', 'geometry', 'area_km2', 
-    'z_med', 'har_elev', 'z_slope', 'z_aspect', 
-    'HI', 'T_mu', 'T_amp', 'P_tot', 'prcp_JJA']]
-
 gdf_correct = correct_lapse(
-    gdf_glacier, x_name='har_elev', y_name='T_mu', 
+    gdf_clim, x_name='har_elev', y_name='T_mu', 
+    xTrue_name='z_med')
+gdf_correct = correct_lapse(
+    gdf_correct, x_name='har_elev', y_name='T_mu', 
     xTrue_name='z_med')
 
 # Drop deprecated variables
-gdf_correct.drop(['har_elev'], axis=1, inplace=True)
+gdf_glacier = gdf_correct.loc[:,
+    ['RGIId', 'mb_mwea', 'geometry', 'area_km2', 
+    'z_med', 'z_slope', 'z_aspect', 
+    'HI', 'T_mu', 'T_amp', 'temp_WARM', 
+    'P_tot', 'prcp_JJA', 'prcp_WARM', 'fracP_WARM']]
 
 # %%
 
-gdf_plt = gdf_correct.sample(10000)
+gdf_plt = gdf_glacier.sample(10000)
 clipping = {'min': 'red', 'max': 'orange'}
 
 # Mass balance map
-mb_min = np.quantile(gdf_correct.mb_mwea, 0.01)
-mb_max = np.quantile(gdf_correct.mb_mwea, 0.99)
+mb_min = np.quantile(gdf_glacier.mb_mwea, 0.01)
+mb_max = np.quantile(gdf_glacier.mb_mwea, 0.99)
 mb_plt = gv.Points(
     data=gdf_plt, vdims=['mb_mwea']).opts(
         color='mb_mwea', colorbar=True, cmap='coolwarm_r', 
@@ -650,8 +654,8 @@ mb_plt = gv.Points(
             mb_mwea=(mb_min,mb_max))
 
 # Temperature maps
-Tmu_min = np.quantile(gdf_correct.T_mu, 0.01)
-Tmu_max = np.quantile(gdf_correct.T_mu, 0.99)
+Tmu_min = np.quantile(gdf_glacier.T_mu, 0.01)
+Tmu_max = np.quantile(gdf_glacier.T_mu, 0.99)
 Tmu_plt = gv.Points(
         data=gdf_plt, 
         vdims=['T_mu']).opts(
@@ -661,9 +665,20 @@ Tmu_plt = gv.Points(
             width=600, height=500).redim.range(
                 T_mu=(Tmu_min, Tmu_max))
 
+Tw_min = np.quantile(gdf_glacier.temp_WARM, 0.01)
+Tw_max = np.quantile(gdf_glacier.temp_WARM, 0.99)
+Tw_plt = gv.Points(
+        data=gdf_plt, 
+        vdims=['temp_WARM']).opts(
+            color='temp_WARM', colorbar=True, 
+            cmap='bmy', clipping_colors=clipping, 
+            size=5, tools=['hover'], bgcolor='silver', 
+            width=600, height=500).redim.range(
+                temp_WARM=(Tw_min, Tw_max))
+
 # Temperature difference map
-Tamp_min = np.quantile(gdf_correct.T_amp, 0.01)
-Tamp_max = np.quantile(gdf_correct.T_amp, 0.99)
+Tamp_min = np.quantile(gdf_glacier.T_amp, 0.01)
+Tamp_max = np.quantile(gdf_glacier.T_amp, 0.99)
 Tamp_plt = gv.Points(
         data=gdf_plt, 
         vdims=['T_amp']).opts(
@@ -674,8 +689,8 @@ Tamp_plt = gv.Points(
                 T_amp=(Tamp_min, Tamp_max))
 
 # Elevation plot
-zmed_min = np.quantile(gdf_correct.z_med, 0.01)
-zmed_max = np.quantile(gdf_correct.z_med, 0.99)
+zmed_min = np.quantile(gdf_glacier.z_med, 0.01)
+zmed_max = np.quantile(gdf_glacier.z_med, 0.99)
 Zmed_plt = gv.Points(
         data=gdf_plt, 
         vdims=['z_med']).opts(
@@ -686,8 +701,8 @@ Zmed_plt = gv.Points(
                 z_med=(zmed_min, zmed_max))
 
 # Total precip plot
-P_max = np.quantile(gdf_correct.P_tot, 0.99)
-P_min = np.quantile(gdf_correct.P_tot, 0.01)
+P_max = np.quantile(gdf_glacier.P_tot, 0.99)
+P_min = np.quantile(gdf_glacier.P_tot, 0.01)
 Ptot_plt = gv.Points(
     data=gdf_plt, 
     vdims=['P_tot']).opts(
@@ -696,17 +711,220 @@ Ptot_plt = gv.Points(
         width=600, height=500).redim.range(
             P_tot=(0,P_max))
 
-# Summer precip plot
-JJAprcp_plt = gv.Points(
+# WARM precip plot
+P_max = np.quantile(gdf_clim.prcp_WARM, 0.99)
+P_min = np.quantile(gdf_clim.prcp_WARM, 0.01)
+warmP_plt = gv.Points(
     data=gdf_plt, 
-    vdims=['prcp_JJA']).opts(
-        color='prcp_JJA', colorbar=True, 
+    vdims=['prcp_WARM']).opts(
+        color='prcp_WARM', colorbar=True, 
         cmap='plasma', clipping_colors=clipping, 
         size=5, tools=['hover'], bgcolor='silver', 
-        width=600, height=500).redim.range(prcp_JJA=(0,1))
+        width=600, height=500).redim.range(
+            prcp_WARM=(P_min,P_max))
+
+# WARM precip plot
+WARMprcp_plt = gv.Points(
+    data=gdf_plt, 
+    vdims=['fracP_WARM']).opts(
+        color='fracP_WARM', colorbar=True, 
+        cmap='plasma', clipping_colors=clipping, 
+        size=5, tools=['hover'], bgcolor='silver', 
+        width=600, height=500).redim.range(fracP_WARM=(0,1))
 
 (
-    mb_plt  + Zmed_plt + Ptot_plt
-    + Tmu_plt + Tamp_plt + JJAprcp_plt).cols(3)
+    mb_plt  + Tw_plt + Tamp_plt + 
+    Zmed_plt + Ptot_plt + WARMprcp_plt).cols(3)
+
+
+# %%[markdown]
+# ## Clustering data for improved spatial modeling
+# 
+# I need to determine if coherent spatial regions (based on location, topography, and climate attributes) can reasonably be discerned in the other attributes in order to justify using cluster groups to improve INLA modeling
+# 
+# %% PCA for dimensionality reduction of climate clusters
+
+# Normalize data variables
+norm_df = pd.DataFrame(gdf_glacier)
+norm_df = norm_df.drop(['RGIId', 'geometry'], axis=1)
+norm_df['Lon'] = gdf_glacier.geometry.x
+norm_df['Lat'] = gdf_glacier.geometry.y
+norm_df = (
+    norm_df-norm_df.mean())/norm_df.std()
+
+# Select only climate variables for pca
+pca_clim = norm_df[
+    ['temp_WARM', 'T_amp', 'P_tot', 'fracP_WARM', 
+    'z_med', 'Lon', 'Lat']] 
+    # 'prcp_JJA', 'T_mu', 'P_tot']] #No additional info added with these
+
+# Perform PCA
+pca = PCA()
+pca.fit(pca_clim)
+
+# Select results that cumulatively explain at least 95% of variance
+pc_var = pca.explained_variance_ratio_.cumsum()
+pc_num = np.arange(
+    len(pc_var))[pc_var >= 0.99][0] + 1
+pca_df = pd.DataFrame(
+    pca.fit_transform(pca_clim)).iloc[:,0:pc_num]
+
+# df of how features correlate with PCs
+feat_corr = pd.DataFrame(
+    pca.components_.T, index=pca_clim.columns)
+
+# %%[markdown]
+# Because the pca didn't sufficiently reduce the required dimensions, I will perform clustering on the raw normalized variables rather than on principle components
+# 
+# %%
+
+# data_samp = gdf_glacier
+data_samp = gdf_glacier.reset_index().sample(
+    frac=0.33, random_state=777)
+
+t0 = time.time()
+Z = linkage(pca_clim.loc[data_samp.index,:], method='ward')
+# Z = linkage(pca_df.loc[data_samp.index,:], method='ward')
+t_end = time.time()
+print(f"Agglomerative clustering time: {t_end-t0:.0f}s")
+
+# %%
+
+plt.figure(figsize=(30, 12))
+plt.title('Hierarchical Clustering Dendrogram')
+plt.xlabel('sample index')
+plt.ylabel('distance')
+dendrogram(
+    Z,
+    truncate_mode='level', p=6, 
+    color_threshold=175, #k=4
+    leaf_font_size=12., 
+    leaf_rotation=90.,  # rotates the x axis labels
+)
+plt.show()
+
+# %%
+
+# # Split results into desired clusters
+# k = 5
+# grp_pred = fcluster(Z, k, criterion='maxclust') - 1
+
+# # Reassign clusters to consistent naming convention
+# A_val = A_val = ord('A')
+# alpha_dict = dict(
+#     zip(np.arange(k), 
+#     [chr(char) for char in np.arange(A_val, A_val+k)]))
+# clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred]
+# data_samp['Group'] = clust_alpha
+
+# # Plot of clusters
+# clust_plt = gv.Points(
+#     data=clust_gdf.sample(7000), 
+#     vdims=['Group']).opts(
+#         color='Group', colorbar=True, 
+#         cmap='Category10', size=5, tools=['hover'], 
+#         legend_position='bottom_left', 
+#         bgcolor='silver', width=600, height=500)
+# clust_plt
+
+# %%
+
+# Cluster predictions
+k = 5
+grp_pred = KMeans(n_clusters=k).fit_predict(pca_clim)
+# grp_pred = KMeans(n_clusters=k).fit_predict(pca_df)
+
+# Reassign clusters to consistent naming convention
+A_val = A_val = ord('A')
+alpha_dict = dict(
+    zip(np.arange(k), 
+    [chr(char) for char in np.arange(A_val, A_val+k)]))
+clust_alpha = [alpha_dict.get(item,item)  for item in grp_pred]
+gdf_glacier['Group'] = clust_alpha
+
+# %%
+
+# Rename groups based on mass balance
+glacier_grps = gdf_glacier.groupby('Group')
+mb_groups = glacier_grps.median()['z_med'].sort_values()
+alpha_new = ['C', 'D', 'E', 'A', 'B']
+A_dict = dict(zip(mb_groups.index, alpha_new))
+gdf_glacier["Group"].replace(A_dict, inplace=True)
+
+glacier_grps = gdf_glacier.groupby('Group')
+cnt_ALL = glacier_grps.count() / gdf_glacier.shape[0]
+print(cnt_ALL['RGIId'])
+
+glac_feat = [
+    'mb_mwea', 'z_med', 'HI', 'z_slope', 
+    'z_aspect', 'area_km2']
+clim_feat = [
+    'temp_WARM', 'T_amp', 
+    'P_tot', 'fracP_WARM']
+print(glacier_grps.median()[glac_feat])
+print(glacier_grps.median()[clim_feat])
+
+# %%
+
+import matplotlib.cm as cm
+cm_tab10 = cm.get_cmap('tab10').colors
+cm_alpha = [
+    chr(el) for el in np.arange(A_val, A_val+len(cm_tab10))]
+cat_cmap = dict(zip(cm_alpha, cm_tab10))
+
+def var_plts(gdf_data, grouping_var, var_list, my_cmap):
+    """
+    Blah.
+    """
+    print(f"Cluster plots for {grouping_var} scheme")
+    cluster_groups = gdf_data.groupby(grouping_var)
+
+    nplt = len(var_list)
+    ncol = 3
+    nrow = int(np.floor(nplt/ncol))
+    if nplt % ncol:
+        nrow += 1
+
+    fig, axs = plt.subplots(nrows=nrow, ncols=ncol)
+
+    for i, var in enumerate(var_list):
+        ax = axs.reshape(-1)[i]
+        for key, group in cluster_groups:
+            group[var].plot(ax=ax, kind='kde', 
+                label=key, color=my_cmap[key], 
+                legend=True)
+        ax.set_xlim(
+            (np.quantile(gdf_data[var], 0.005), 
+            np.quantile(gdf_data[var], 0.995)))
+        ax.set_xlabel(var)
+    
+    fig.set_size_inches((35,55))
+    plt.show()
+
+# %%
+
+# Plot of clusters
+clust_plt = gv.Points(
+    data=gdf_glacier.sample(10000), 
+    vdims=['Group']).opts(
+        color='Group', colorbar=True, 
+        cmap='Category10', size=5, tools=['hover'], 
+        legend_position='bottom_left', 
+        bgcolor='silver', width=600, height=500)
+clust_plt
+
+# %%
+
+plt_vars = [
+    'mb_mwea', 'z_med', 'HI', 
+    'area_km2', 'z_slope', 'z_aspect', 
+    'temp_WARM', 'P_tot', 'fracP_WARM']
+var_plts(gdf_glacier, 'Group', plt_vars, cat_cmap)
+
+# %%
+
+# Save corrected data to disk
+gdf_glacier.to_file(DATA_DIR.joinpath(
+    'glacier-corrected.geojson'), driver='GeoJSON')
 
 # %%
